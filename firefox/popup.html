@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>OpenModHeader</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body data-section="requestHeaders">
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="wordmark">OpenModHeader</span>
+    </div>
+    <div class="topbar-actions">
+      <label class="power" title="Turn all headers on or off">
+        <input type="checkbox" id="power" checked>
+        <span class="power-track"><span class="power-knob"></span></span>
+        <span class="power-label" id="power-label">On</span>
+      </label>
+      <button class="icon-btn" id="btn-expand" title="Open in a full tab">&#x2197;</button>
+      <button class="icon-btn" id="btn-menu" title="More" aria-haspopup="true">&#x22EF;</button>
+    </div>
+  </header>
+
+  <div class="access" id="access" hidden>
+    <p class="access-text">OpenModHeader has no access to your sites, so no headers are being changed.</p>
+    <button class="access-btn" id="btn-grant">Grant access</button>
+  </div>
+
+  <nav class="profiles" id="profiles" aria-label="Profiles"></nav>
+
+  <nav class="sections" role="tablist">
+    <button class="section-tab" role="tab" data-section="requestHeaders">
+      <span class="arrow">&#x2191;</span>Request<span class="tally" data-tally="requestHeaders"></span>
+    </button>
+    <button class="section-tab" role="tab" data-section="responseHeaders">
+      <span class="arrow">&#x2193;</span>Response<span class="tally" data-tally="responseHeaders"></span>
+    </button>
+    <button class="section-tab" role="tab" data-section="filters">
+      <span class="arrow">&#x2317;</span>Filters<span class="tally" data-tally="filters"></span>
+    </button>
+  </nav>
+
+  <main id="content" role="tabpanel"></main>
+
+  <footer class="statusbar">
+    <button class="add-btn" id="btn-add">Add header</button>
+    <p class="status" id="status"></p>
+  </footer>
+
+  <div class="popover" id="profile-menu" hidden>
+    <label class="field">
+      <span class="field-label">Name</span>
+      <input type="text" id="profile-name" maxlength="60" spellcheck="false">
+    </label>
+    <div class="field">
+      <span class="field-label">Colour</span>
+      <div class="swatches" id="profile-colors"></div>
+    </div>
+    <div class="popover-actions">
+      <button class="ghost-btn" id="btn-duplicate">Duplicate</button>
+      <button class="ghost-btn danger" id="btn-delete-profile">Delete</button>
+    </div>
+  </div>
+
+  <div class="popover" id="main-menu" hidden>
+    <button class="menu-item" id="btn-export">Export profiles to a file</button>
+    <button class="menu-item" id="btn-import">Import profiles from a file</button>
+    <button class="menu-item" id="btn-copy">Copy profiles as JSON</button>
+    <hr>
+    <button class="menu-item danger" id="btn-reset">Delete everything and start over</button>
+  </div>
+
+  <input type="file" id="file-input" accept="application/json,.json" hidden>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

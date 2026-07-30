@@ -1,16 +1,36 @@
 # OpenModHeader
 
-A Chrome extension for adding, rewriting, and removing HTTP request and response headers. Built on Manifest V3 and `declarativeNetRequest`.
+A Chrome/Firefox extension for adding, rewriting, and removing HTTP request and response headers.
 
-## Install
+## Install on Chrome
 
-1. Unzip this folder somewhere permanent — Chrome loads it from disk every time it starts, so don't leave it in Downloads.
-2. Go to `chrome://extensions`.
-3. Turn on **Developer mode** (top right).
-4. Click **Load unpacked** and pick the `OpenModHeader` folder.
-5. Pin it from the puzzle-piece menu in the toolbar.
+1. Unzip somewhere permanent. Chrome reads the folder from disk at every startup, so don't leave it in Downloads.
+2. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and pick the `chrome` folder.
+3. Pin it from the puzzle-piece menu.
 
-Chrome will ask for "Read and change all your data on all websites". Rewriting headers on arbitrary URLs is exactly what that permission covers.
+Site access is granted at install and stays granted.
+
+## Install on Firefox
+
+**For a session, no signing needed:**
+
+1. Open `about:debugging#/runtime/this-firefox`.
+2. Click **Load Temporary Add-on** and pick any file inside the `firefox` folder, such as `manifest.json`.
+
+Temporary add-ons are removed when Firefox restarts. That is fine for trying it out, less fine for daily use.
+
+**To keep it permanently,** release and Beta Firefox require a signed add-on, so pick one of:
+
+- **Sign it yourself.** Zip the *contents* of the `firefox` folder (the manifest must sit at the archive root, not inside a subfolder), then submit it to [addons.mozilla.org](https://addons.mozilla.org/developers/) as an **unlisted** add-on. Mozilla signs it and hands back an `.xpi` that installs permanently and stays private. This is the intended route for personal extensions and usually takes a few minutes.
+- **Turn signing off.** Only Developer Edition, Nightly, and ESR allow this: set `xpinstall.signatures.required` to `false` in `about:config`, then install the zip renamed to `.xpi`. Release and Beta ignore this setting.
+
+The `web-ext` CLI (`npx web-ext run` and `npx web-ext sign`) automates both paths if you'd rather not click through.
+
+### Site access on Firefox
+
+Firefox treats host access as something you can revoke at any moment, from the extensions button in the toolbar. If access is missing, the popup shows a red bar with a **Grant access** button. If you'd rather do it manually, use the extensions button in the toolbar and choose to always allow OpenModHeader on all sites.
+
+Firefox also never re-prompts when an update asks for new host permissions, which is why the popup re-checks every time you open it.
 
 ## Using it
 

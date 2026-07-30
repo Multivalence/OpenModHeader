@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "OpenModHeader",
+  "version": "1.0.0",
+  "description": "Add, rewrite, and remove HTTP request and response headers. Organise rules into profiles and scope them with URL filters.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "openmodheader@openmodheader.local",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": [
+    "webRequest",
+    "webRequestBlocking",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "type": "module"
+  },
+  "action": {
+    "default_title": "OpenModHeader",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "commands": {
+    "toggle-pause": {
+      "suggested_key": {
+        "default": "Alt+Shift+H"
+      },
+      "description": "Turn OpenModHeader on or off"
+    }
+  }
+}

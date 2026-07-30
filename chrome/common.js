@@ -1,10 +1,23 @@
 /* OpenModHeader — shared state model and rule compiler.
-   Imported by both the service worker and the popup. */
+   Imported by the background script and the popup on every browser.
+   This file is byte-identical in the chrome/ and firefox/ builds. */
+
+/* Firefox exposes promise-based `browser.*`; Chrome exposes `chrome.*`,
+   which also returns promises for every API this extension touches. */
+export const api = globalThis.browser ?? globalThis.chrome;
 
 export const RESOURCE_TYPES = [
   'main_frame', 'sub_frame', 'stylesheet', 'script', 'image', 'font',
   'object', 'xmlhttprequest', 'ping', 'csp_report', 'media',
   'websocket', 'other'
+];
+
+/* Gecko recognises everything above plus these. Chrome rejects an entire
+   rule if it sees a type it does not know, so they stay in a separate list
+   and only the Firefox engine accepts them. */
+export const GECKO_RESOURCE_TYPES = [
+  'beacon', 'imageset', 'object_subrequest', 'speculative',
+  'web_manifest', 'xml_dtd', 'xslt'
 ];
 
 export const PROFILE_COLORS = [
@@ -142,12 +155,12 @@ function normalizeFilters(list) {
 }
 
 export async function loadState() {
-  const stored = await chrome.storage.local.get('state');
+  const stored = await api.storage.local.get('state');
   return normalize(stored.state);
 }
 
 export async function saveState(state) {
-  await chrome.storage.local.set({ state });
+  await api.storage.local.set({ state });
 }
 
 /* ---------------------------------------------------------------- *

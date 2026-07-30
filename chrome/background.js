@@ -1,8 +1,8 @@
-/* OpenModHeader — service worker.
+/* OpenModHeader — Chrome background service worker.
    Watches stored state, compiles it into declarativeNetRequest dynamic rules,
    and reports any rule the engine rejects back to the popup. */
 
-import { loadState, saveState, buildRules, stripMeta, countActiveHeaders } from './common.js';
+import { api, loadState, saveState, buildRules, stripMeta, countActiveHeaders } from './common.js';
 
 let running = false;
 let queued = false;
@@ -13,29 +13,29 @@ async function applyRules() {
   try {
     const state = await loadState();
     const rules = buildRules(state);
-    const existing = await chrome.declarativeNetRequest.getDynamicRules();
+    const existing = await api.declarativeNetRequest.getDynamicRules();
     const removeRuleIds = existing.map(r => r.id);
     const errors = [];
 
     try {
-      await chrome.declarativeNetRequest.updateDynamicRules({
+      await api.declarativeNetRequest.updateDynamicRules({
         removeRuleIds,
         addRules: rules.map(stripMeta)
       });
     } catch {
       /* One bad rule fails the whole batch, so fall back to adding them
          one at a time and name the ones the engine turns down. */
-      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
+      await api.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
       for (const rule of rules) {
         try {
-          await chrome.declarativeNetRequest.updateDynamicRules({ addRules: [stripMeta(rule)] });
+          await api.declarativeNetRequest.updateDynamicRules({ addRules: [stripMeta(rule)] });
         } catch (err) {
           errors.push(describe(rule, err));
         }
       }
     }
 
-    await chrome.storage.local.set({ ruleErrors: errors });
+    await api.storage.local.set({ ruleErrors: errors });
     await updateBadge(state);
   } finally {
     running = false;
@@ -57,13 +57,13 @@ async function updateBadge(state) {
   const profile = state.profiles.find(p => p.id === state.activeProfileId) || state.profiles[0];
 
   if (state.paused) {
-    await chrome.action.setBadgeText({ text: 'off' });
-    await chrome.action.setBadgeBackgroundColor({ color: '#6B7688' });
-    await chrome.action.setTitle({ title: 'OpenModHeader — off' });
+    await api.action.setBadgeText({ text: 'off' });
+    await api.action.setBadgeBackgroundColor({ color: '#6B7688' });
+    await api.action.setTitle({ title: 'OpenModHeader — off' });
   } else {
-    await chrome.action.setBadgeText({ text: count ? String(count) : '' });
-    await chrome.action.setBadgeBackgroundColor({ color: profile?.color || '#B4470E' });
-    await chrome.action.setTitle({
+    await api.action.setBadgeText({ text: count ? String(count) : '' });
+    await api.action.setBadgeBackgroundColor({ color: profile?.color || '#B4470E' });
+    await api.action.setTitle({
       title: count
         ? `OpenModHeader — ${count} header${count === 1 ? '' : 's'} active`
         : 'OpenModHeader — no headers active'
@@ -71,21 +71,21 @@ async function updateBadge(state) {
   }
 
   try {
-    await chrome.action.setBadgeTextColor({ color: '#FFFFFF' });
+    await api.action.setBadgeTextColor({ color: '#FFFFFF' });
   } catch {
     /* setBadgeTextColor needs Chrome 110; the badge still works without it. */
   }
 }
 
-chrome.storage.onChanged.addListener((changes, area) => {
+api.storage.onChanged.addListener((changes, area) => {
   // Only react to the state key — writing ruleErrors must not loop back here.
   if (area === 'local' && changes.state) applyRules();
 });
 
-chrome.runtime.onInstalled.addListener(applyRules);
-chrome.runtime.onStartup.addListener(applyRules);
+api.runtime.onInstalled.addListener(applyRules);
+api.runtime.onStartup.addListener(applyRules);
 
-chrome.commands.onCommand.addListener(async command => {
+api.commands.onCommand.addListener(async command => {
   if (command !== 'toggle-pause') return;
   const state = await loadState();
   state.paused = !state.paused;

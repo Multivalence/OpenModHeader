@@ -1,7 +1,7 @@
 /* OpenModHeader — popup controller. */
 
 import {
-  loadState, saveState, normalize, defaultState,
+  api, loadState, saveState, normalize, defaultState,
   blankHeader, blankFilter, blankProfile,
   PROFILE_COLORS, FILTER_TYPES, OPERATIONS,
   APPENDABLE_REQUEST_HEADERS, countActiveHeaders
@@ -516,7 +516,7 @@ function bind() {
   });
 
   $('btn-expand').addEventListener('click', () => {
-    chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?view=tab') });
+    api.tabs.create({ url: api.runtime.getURL('popup.html?view=tab') });
     window.close();
   });
 
@@ -545,6 +545,7 @@ function bind() {
     inputs[inputs.length - (section === 'filters' ? 1 : 2)]?.focus();
   });
 
+  $('btn-grant').addEventListener('click', requestAccess);
   $('btn-export').addEventListener('click', exportFile);
   $('btn-copy').addEventListener('click', copyJson);
   $('btn-import').addEventListener('click', () => $('file-input').click());
@@ -563,7 +564,7 @@ function bind() {
     renderAll();
   });
 
-  chrome.storage.onChanged.addListener((changes, area) => {
+  api.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (changes.ruleErrors) {
       ruleErrors = changes.ruleErrors.newValue || [];
@@ -576,15 +577,39 @@ function bind() {
   });
 }
 
+/* Firefox treats host access as revocable at any moment, and an extension
+   update never re-prompts. Check on every open and offer to ask again. */
+async function checkAccess() {
+  const banner = $('access');
+  if (!api.permissions?.contains) return;
+  try {
+    banner.hidden = await api.permissions.contains({ origins: ['<all_urls>'] });
+  } catch {
+    banner.hidden = true;
+  }
+}
+
+async function requestAccess() {
+  try {
+    if (await api.permissions.request({ origins: ['<all_urls>'] })) {
+      $('access').hidden = true;
+      flash('Site access granted. Reload any open tabs to pick up your headers.');
+    }
+  } catch {
+    flash('Firefox would not open the access prompt. Grant it from the extensions button in the toolbar.');
+  }
+}
+
 async function init() {
   if (new URLSearchParams(location.search).get('view') === 'tab') {
     document.body.classList.add('expanded');
   }
   state = await loadState();
-  const stored = await chrome.storage.local.get('ruleErrors');
+  const stored = await api.storage.local.get('ruleErrors');
   ruleErrors = stored.ruleErrors || [];
   bind();
   renderAll();
+  checkAccess();
 }
 
 init();
