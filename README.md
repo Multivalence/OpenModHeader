@@ -1,17 +1,10 @@
+![OpenModHeader](images/promo-marquee-1400x560.png)
+
 # OpenModHeader
 
 Add, rewrite, and remove HTTP request and response headers from your browser toolbar. Group rules into profiles, scope them to the URLs you care about, and flip the whole thing off with one keystroke.
 
 Built on Manifest V3 for both Chrome and Firefox. No account, no telemetry, no network calls — everything stays on your machine.
-
----
-
-## Screenshots
-
-| | |
-|---|---|
-| ![Request headers](images/request.png)<br>**Request headers** — pick `set`, `append`, or `remove` per row; each row reads like the line it sends. | ![Response headers](images/response.png)<br>**Response headers** — the same editor for headers rewritten as traffic arrives. |
-| ![Filters](images/filters.png)<br>**Filters** — scope a profile by URL substring, regex, excluded domains, or resource type. | ![Profile settings](images/customize.png)<br>**Profiles** — rename, recolour, duplicate, or delete from the tab that's already open. |
 
 ---
 
@@ -24,10 +17,14 @@ Built on Manifest V3 for both Chrome and Firefox. No account, no telemetry, no n
 - Autocomplete for common request and response header names
 - Live count of active rules on the toolbar badge
 
+![Request and response headers](images/screenshot-1-requestHeaders.png)
+
 **Cookie editor**
 - Edit individual cookies instead of hand-writing the whole `Cookie` header
 - Request cookies merge with what the browser already sends, or replace it entirely
 - Response cookies become `Set-Cookie` with full attribute control: Path, Domain, Max-Age, SameSite, Secure, HttpOnly
+
+![Cookie editor](images/screenshot-2-cookies.png)
 
 **Content-Security-Policy editor**
 - Leave CSP alone, strip it entirely, or replace it with a policy you compose
@@ -35,9 +32,13 @@ Built on Manifest V3 for both Chrome and Firefox. No account, no telemetry, no n
 - Live preview of the exact header that will be sent
 - Toggle between enforcing and `Report-Only`
 
+![Content-Security-Policy editor](images/screenshot-3-csp.png)
+
 **Redirects**
 - Send matching requests somewhere else — handy for pointing a CDN asset at localhost
 - Match by substring or regex, with `\\1` capture-group substitution in the target
+
+![Redirects](images/screenshot-4-redirects.png)
 
 **Profiles**
 - Unlimited independent header sets, each with its own name and colour
@@ -52,6 +53,8 @@ Built on Manifest V3 for both Chrome and Firefox. No account, no telemetry, no n
 - `Resource types` — restrict to `xmlhttprequest`, `main_frame`, `script`, and so on
 - `Tab` / `Window` — scope a profile to one tab or window, with a **Use current** button that fills in the id for you
 - Leave filters empty and the profile applies everywhere
+
+![Filters](images/screenshot-5-filters.png)
 
 **Everything else**
 - Global on/off switch, plus `Alt+Shift+H` from anywhere
