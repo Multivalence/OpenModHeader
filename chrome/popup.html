@@ -12,19 +12,24 @@
       <span class="wordmark">OpenModHeader</span>
     </div>
     <div class="topbar-actions">
-      <label class="power" title="Turn all headers on or off">
+      <label class="power" title="Turn all rules on or off">
         <input type="checkbox" id="power" checked>
         <span class="power-track"><span class="power-knob"></span></span>
         <span class="power-label" id="power-label">On</span>
       </label>
+      <button class="icon-btn" id="btn-undo" title="Undo (Ctrl+Z)" disabled>&#x21B6;</button>
       <button class="icon-btn" id="btn-expand" title="Open in a full tab">&#x2197;</button>
       <button class="icon-btn" id="btn-menu" title="More" aria-haspopup="true">&#x22EF;</button>
     </div>
   </header>
 
   <div class="access" id="access" hidden>
-    <p class="access-text">OpenModHeader has no access to your sites, so no headers are being changed.</p>
+    <p class="access-text">OpenModHeader has no access to your sites, so nothing is being changed.</p>
     <button class="access-btn" id="btn-grant">Grant access</button>
+  </div>
+
+  <div class="profile-search" id="profile-search" hidden>
+    <input type="search" id="search" placeholder="Search profiles" spellcheck="false" autocomplete="off">
   </div>
 
   <nav class="profiles" id="profiles" aria-label="Profiles"></nav>
@@ -36,8 +41,17 @@
     <button class="section-tab" role="tab" data-section="responseHeaders">
       <span class="arrow">&#x2193;</span>Response<span class="tally" data-tally="responseHeaders"></span>
     </button>
+    <button class="section-tab" role="tab" data-section="cookies">
+      Cookies<span class="tally" data-tally="cookies"></span>
+    </button>
+    <button class="section-tab" role="tab" data-section="csp">
+      CSP<span class="tally" data-tally="csp"></span>
+    </button>
+    <button class="section-tab" role="tab" data-section="redirects">
+      Redirects<span class="tally" data-tally="redirects"></span>
+    </button>
     <button class="section-tab" role="tab" data-section="filters">
-      <span class="arrow">&#x2317;</span>Filters<span class="tally" data-tally="filters"></span>
+      Filters<span class="tally" data-tally="filters"></span>
     </button>
   </nav>
 
@@ -57,6 +71,10 @@
       <span class="field-label">Colour</span>
       <div class="swatches" id="profile-colors"></div>
     </div>
+    <label class="toggle-row">
+      <input type="checkbox" id="profile-enabled">
+      <span>Profile is on</span>
+    </label>
     <div class="popover-actions">
       <button class="ghost-btn" id="btn-duplicate">Duplicate</button>
       <button class="ghost-btn danger" id="btn-delete-profile">Delete</button>
@@ -71,6 +89,9 @@
     <button class="menu-item danger" id="btn-reset">Delete everything and start over</button>
   </div>
 
+  <datalist id="request-header-names"></datalist>
+  <datalist id="response-header-names"></datalist>
+  <datalist id="csp-directive-names"></datalist>
   <input type="file" id="file-input" accept="application/json,.json" hidden>
   <script type="module" src="popup.js"></script>
 </body>

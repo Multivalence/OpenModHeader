@@ -1,6 +1,5 @@
 /* OpenModHeader — shared state model and rule compiler.
-   Imported by the background script and the popup on every browser.
-   This file is byte-identical in the chrome/ and firefox/ builds. */
+   Byte-identical in the chrome/ and firefox/ builds. */
 
 /* Firefox exposes promise-based `browser.*`; Chrome exposes `chrome.*`,
    which also returns promises for every API this extension touches. */
@@ -13,8 +12,8 @@ export const RESOURCE_TYPES = [
 ];
 
 /* Gecko recognises everything above plus these. Chrome rejects an entire
-   rule if it sees a type it does not know, so they stay in a separate list
-   and only the Firefox engine accepts them. */
+   rule if it sees a type it does not know, so they stay separate and only
+   the Firefox engine accepts them. */
 export const GECKO_RESOURCE_TYPES = [
   'beacon', 'imageset', 'object_subrequest', 'speculative',
   'web_manifest', 'xml_dtd', 'xslt'
@@ -25,29 +24,13 @@ export const PROFILE_COLORS = [
   '#0B6E3F', '#6D28D9', '#0369A1', '#8A6212'
 ];
 
-export const FILTER_TYPES = {
-  urlContains: {
-    label: 'URL contains',
-    placeholder: 'api.example.com/v2'
-  },
-  urlRegex: {
-    label: 'URL matches regex',
-    placeholder: '^https://[a-z]+\\.example\\.com/.*'
-  },
-  excludeDomain: {
-    label: 'Exclude domains',
-    placeholder: 'analytics.com, ads.example.com'
-  },
-  resourceType: {
-    label: 'Resource types',
-    placeholder: 'xmlhttprequest, main_frame'
-  }
-};
-
 export const OPERATIONS = ['set', 'append', 'remove'];
 
-/* Chrome only allows `append` on this set of request headers. Anything else
-   is rejected by the rule engine, so the popup warns before you save. */
+export const SECTIONS = [
+  'requestHeaders', 'responseHeaders', 'cookies', 'csp', 'redirects', 'filters'
+];
+
+/* Chrome only allows `append` on this set of request headers. */
 export const APPENDABLE_REQUEST_HEADERS = new Set([
   'accept', 'accept-encoding', 'accept-language', 'access-control-request-headers',
   'cache-control', 'connection', 'content-language', 'cookie', 'forwarded',
@@ -56,16 +39,87 @@ export const APPENDABLE_REQUEST_HEADERS = new Set([
   'x-forwarded-for'
 ]);
 
+export const FILTER_TYPES = {
+  urlContains: { label: 'URL contains', placeholder: 'api.example.com/v2' },
+  urlRegex: { label: 'URL matches regex', placeholder: '^https://[a-z]+\\.example\\.com/' },
+  excludeUrlContains: { label: 'Exclude URL containing', placeholder: '/healthz' },
+  excludeUrlRegex: { label: 'Exclude URL regex', placeholder: '\\.(png|jpe?g|gif)$' },
+  excludeDomain: { label: 'Exclude domains', placeholder: 'ads.com, tracker.io' },
+  resourceType: { label: 'Resource types', placeholder: 'xmlhttprequest, main_frame' },
+  tabId: { label: 'Tab', placeholder: 'tab id', capture: 'tab' },
+  windowId: { label: 'Window', placeholder: 'window id', capture: 'window' }
+};
+
+export const CSP_MODES = {
+  off: 'Leave CSP alone',
+  remove: 'Remove CSP entirely',
+  replace: 'Replace CSP with the policy below'
+};
+
+export const CSP_DIRECTIVES = [
+  'default-src', 'script-src', 'script-src-elem', 'style-src', 'style-src-elem',
+  'img-src', 'connect-src', 'font-src', 'media-src', 'object-src',
+  'frame-src', 'child-src', 'worker-src', 'manifest-src',
+  'frame-ancestors', 'base-uri', 'form-action', 'sandbox',
+  'report-uri', 'report-to', 'upgrade-insecure-requests'
+];
+
+export const SAME_SITE_VALUES = ['', 'Strict', 'Lax', 'None'];
+
+export const REDIRECT_TYPES = {
+  contains: { label: 'URL contains', placeholder: 'https://cdn.example.com/app.js' },
+  regex: { label: 'URL matches regex', placeholder: '^https://cdn\\.example\\.com/(.*)$' }
+};
+
+/* Offered as autocomplete in the header name fields. */
+export const COMMON_REQUEST_HEADERS = [
+  'Accept', 'Accept-Encoding', 'Accept-Language', 'Authorization', 'Cache-Control',
+  'Content-Type', 'Cookie', 'DNT', 'If-Match', 'If-None-Match', 'Origin',
+  'Pragma', 'Referer', 'User-Agent', 'X-Api-Key', 'X-Correlation-Id',
+  'X-CSRF-Token', 'X-Forwarded-For', 'X-Forwarded-Host', 'X-Forwarded-Proto',
+  'X-Requested-With'
+];
+
+export const COMMON_RESPONSE_HEADERS = [
+  'Access-Control-Allow-Credentials', 'Access-Control-Allow-Headers',
+  'Access-Control-Allow-Methods', 'Access-Control-Allow-Origin',
+  'Access-Control-Expose-Headers', 'Cache-Control', 'Content-Disposition',
+  'Content-Security-Policy', 'Content-Type', 'Cross-Origin-Embedder-Policy',
+  'Cross-Origin-Opener-Policy', 'Cross-Origin-Resource-Policy', 'ETag',
+  'Location', 'Permissions-Policy', 'Referrer-Policy', 'Set-Cookie',
+  'Strict-Transport-Security', 'X-Content-Type-Options', 'X-Frame-Options'
+];
+
 export function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
 
 export function blankHeader(name = '', value = '') {
-  return { id: uid(), enabled: true, operation: 'set', name, value };
+  return { id: uid(), enabled: true, operation: 'set', name, value, comment: '' };
+}
+
+export function blankCookie() {
+  return {
+    id: uid(), enabled: true, target: 'request', name: '', value: '',
+    path: '', domain: '', maxAge: '', secure: false, httpOnly: false,
+    sameSite: '', comment: ''
+  };
+}
+
+export function blankCspDirective(name = '', value = '') {
+  return { id: uid(), enabled: true, name, value };
+}
+
+export function blankRedirect() {
+  return { id: uid(), enabled: true, type: 'contains', from: '', to: '', comment: '' };
 }
 
 export function blankFilter(type = 'urlContains') {
   return { id: uid(), enabled: true, type, value: '' };
+}
+
+export function blankCsp() {
+  return { mode: 'off', reportOnly: false, directives: [] };
 }
 
 export function blankProfile(index = 1, colorIndex = 0) {
@@ -76,22 +130,23 @@ export function blankProfile(index = 1, colorIndex = 0) {
     enabled: true,
     requestHeaders: [blankHeader()],
     responseHeaders: [],
+    cookies: [],
+    cookieMode: 'merge',
+    csp: blankCsp(),
+    redirects: [],
     filters: []
   };
 }
 
 export function defaultState() {
   const profile = blankProfile(1, 0);
-  return {
-    version: 1,
-    paused: false,
-    activeProfileId: profile.id,
-    profiles: [profile]
-  };
+  return { version: 2, paused: false, activeProfileId: profile.id, profiles: [profile] };
 }
 
-/* Accepts anything (old versions, hand-edited JSON, partial imports) and
-   returns a fully-formed state object. Never throws. */
+/* ---------------------------------------------------------------- *
+ * Normalisation — accepts anything and returns a valid state
+ * ---------------------------------------------------------------- */
+
 export function normalize(raw) {
   const base = defaultState();
   if (!raw || typeof raw !== 'object') return base;
@@ -104,12 +159,11 @@ export function normalize(raw) {
     ? raw.activeProfileId
     : clean[0].id;
 
-  return {
-    version: 1,
-    paused: !!raw.paused,
-    activeProfileId,
-    profiles: clean
-  };
+  return { version: 2, paused: !!raw.paused, activeProfileId, profiles: clean };
+}
+
+function str(value) {
+  return String(value ?? '');
 }
 
 function normalizeProfile(p, i) {
@@ -121,6 +175,10 @@ function normalizeProfile(p, i) {
     enabled: p.enabled !== false,
     requestHeaders: normalizeHeaders(p.requestHeaders ?? p.headers),
     responseHeaders: normalizeHeaders(p.responseHeaders ?? p.respHeaders),
+    cookies: normalizeCookies(p.cookies),
+    cookieMode: p.cookieMode === 'replace' ? 'replace' : 'merge',
+    csp: normalizeCsp(p.csp),
+    redirects: normalizeRedirects(p.redirects),
     filters: normalizeFilters(p.filters)
   };
 }
@@ -129,13 +187,67 @@ function normalizeHeaders(list) {
   if (!Array.isArray(list)) return [];
   return list.map(h => {
     if (!h || typeof h !== 'object') return null;
-    const operation = OPERATIONS.includes(h.operation) ? h.operation : 'set';
     return {
       id: typeof h.id === 'string' && h.id ? h.id : uid(),
       enabled: h.enabled !== false,
-      operation,
-      name: String(h.name ?? '').trim(),
-      value: String(h.value ?? '')
+      operation: OPERATIONS.includes(h.operation) ? h.operation : 'set',
+      name: str(h.name).trim(),
+      value: str(h.value),
+      comment: str(h.comment)
+    };
+  }).filter(Boolean);
+}
+
+function normalizeCookies(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map(c => {
+    if (!c || typeof c !== 'object') return null;
+    return {
+      id: typeof c.id === 'string' && c.id ? c.id : uid(),
+      enabled: c.enabled !== false,
+      target: c.target === 'response' ? 'response' : 'request',
+      name: str(c.name).trim(),
+      value: str(c.value),
+      path: str(c.path).trim(),
+      domain: str(c.domain).trim(),
+      maxAge: str(c.maxAge).trim(),
+      secure: !!c.secure,
+      httpOnly: !!c.httpOnly,
+      sameSite: SAME_SITE_VALUES.includes(c.sameSite) ? c.sameSite : '',
+      comment: str(c.comment)
+    };
+  }).filter(Boolean);
+}
+
+function normalizeCsp(csp) {
+  if (!csp || typeof csp !== 'object') return blankCsp();
+  const directives = Array.isArray(csp.directives) ? csp.directives : [];
+  return {
+    mode: Object.hasOwn(CSP_MODES, csp.mode) ? csp.mode : 'off',
+    reportOnly: !!csp.reportOnly,
+    directives: directives.map(d => {
+      if (!d || typeof d !== 'object') return null;
+      return {
+        id: typeof d.id === 'string' && d.id ? d.id : uid(),
+        enabled: d.enabled !== false,
+        name: str(d.name).trim(),
+        value: str(d.value).trim()
+      };
+    }).filter(Boolean)
+  };
+}
+
+function normalizeRedirects(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map(r => {
+    if (!r || typeof r !== 'object') return null;
+    return {
+      id: typeof r.id === 'string' && r.id ? r.id : uid(),
+      enabled: r.enabled !== false,
+      type: Object.hasOwn(REDIRECT_TYPES, r.type) ? r.type : 'contains',
+      from: str(r.from).trim(),
+      to: str(r.to).trim(),
+      comment: str(r.comment)
     };
   }).filter(Boolean);
 }
@@ -144,12 +256,11 @@ function normalizeFilters(list) {
   if (!Array.isArray(list)) return [];
   return list.map(f => {
     if (!f || typeof f !== 'object') return null;
-    const type = Object.hasOwn(FILTER_TYPES, f.type) ? f.type : 'urlContains';
     return {
       id: typeof f.id === 'string' && f.id ? f.id : uid(),
       enabled: f.enabled !== false,
-      type,
-      value: String(f.value ?? '')
+      type: Object.hasOwn(FILTER_TYPES, f.type) ? f.type : 'urlContains',
+      value: str(f.value)
     };
   }).filter(Boolean);
 }
@@ -164,87 +275,138 @@ export async function saveState(state) {
 }
 
 /* ---------------------------------------------------------------- *
- * Rule compiler: state -> declarativeNetRequest dynamic rules
+ * Planning — profile to a browser-agnostic set of operations
  * ---------------------------------------------------------------- */
 
-export function activeHeaders(profile) {
-  const req = (profile.requestHeaders || []).filter(isLive);
-  const res = (profile.responseHeaders || []).filter(isLive);
-  return { req, res };
+function isLive(item) {
+  return item.enabled && item.name.trim().length > 0;
 }
 
-function isLive(h) {
-  return h.enabled && h.name.trim().length > 0;
+export function serializeCookie(cookie) {
+  const parts = [`${cookie.name.trim()}=${cookie.value}`];
+  if (cookie.path) parts.push(`Path=${cookie.path}`);
+  if (cookie.domain) parts.push(`Domain=${cookie.domain}`);
+  if (cookie.maxAge) parts.push(`Max-Age=${cookie.maxAge}`);
+  if (cookie.sameSite) parts.push(`SameSite=${cookie.sameSite}`);
+  if (cookie.secure) parts.push('Secure');
+  if (cookie.httpOnly) parts.push('HttpOnly');
+  return parts.join('; ');
+}
+
+export function buildCspPolicy(csp) {
+  return csp.directives
+    .filter(d => d.enabled && d.name.trim())
+    .map(d => `${d.name.trim()} ${d.value}`.trim())
+    .join('; ');
+}
+
+function toOp(header) {
+  return {
+    name: header.name.trim(),
+    value: header.value,
+    operation: header.operation || 'set'
+  };
+}
+
+/* Turns one profile into the header operations it implies, folding in the
+   cookie editor and the CSP editor. Request cookies come back separately
+   because Firefox can merge them properly against the real header while
+   Chrome can only append. */
+export function planProfile(profile) {
+  const requestOps = profile.requestHeaders.filter(isLive).map(toOp);
+  const responseOps = profile.responseHeaders.filter(isLive).map(toOp);
+
+  const cookies = profile.cookies || [];
+  const requestCookies = cookies
+    .filter(c => c.enabled && c.target === 'request' && c.name.trim())
+    .map(c => ({ name: c.name.trim(), value: c.value }));
+
+  for (const cookie of cookies.filter(c => c.enabled && c.target === 'response' && c.name.trim())) {
+    responseOps.push({ name: 'Set-Cookie', value: serializeCookie(cookie), operation: 'append' });
+  }
+
+  const csp = profile.csp || blankCsp();
+  if (csp.mode === 'remove') {
+    responseOps.push({ name: 'Content-Security-Policy', value: '', operation: 'remove' });
+    responseOps.push({ name: 'Content-Security-Policy-Report-Only', value: '', operation: 'remove' });
+  } else if (csp.mode === 'replace') {
+    const policy = buildCspPolicy(csp);
+    if (policy) {
+      responseOps.push({
+        name: csp.reportOnly ? 'Content-Security-Policy-Report-Only' : 'Content-Security-Policy',
+        value: policy,
+        operation: 'set'
+      });
+    }
+  }
+
+  const redirects = (profile.redirects || [])
+    .filter(r => r.enabled && r.from.trim() && r.to.trim());
+
+  return {
+    requestOps,
+    responseOps,
+    requestCookies,
+    cookieMode: profile.cookieMode === 'replace' ? 'replace' : 'merge',
+    redirects
+  };
+}
+
+export function profileIsActive(profile) {
+  const plan = planProfile(profile);
+  return plan.requestOps.length > 0
+    || plan.responseOps.length > 0
+    || plan.requestCookies.length > 0
+    || plan.redirects.length > 0;
 }
 
 export function countActiveHeaders(state) {
   if (state.paused) return 0;
-  return state.profiles.reduce((total, p) => {
-    if (!p.enabled) return total;
-    const { req, res } = activeHeaders(p);
-    return total + req.length + res.length;
+  return state.profiles.reduce((total, profile) => {
+    if (!profile.enabled) return total;
+    const plan = planProfile(profile);
+    return total
+      + plan.requestOps.length
+      + plan.responseOps.length
+      + (plan.requestCookies.length ? 1 : 0)
+      + plan.redirects.length;
   }, 0);
 }
 
-function toHeaderInfo(h) {
-  const info = {
-    header: h.name.trim().toLowerCase(),
-    operation: h.operation || 'set'
-  };
-  if (info.operation !== 'remove') info.value = String(h.value ?? '');
-  return info;
+/* ---------------------------------------------------------------- *
+ * Filters
+ * ---------------------------------------------------------------- */
+
+function splitList(value) {
+  return value.split(',').map(s => s.trim()).filter(Boolean);
 }
 
-function buildConditions(profile) {
+export function parseFilters(profile, knownTypes) {
   const live = (profile.filters || []).filter(f => f.enabled && f.value.trim());
-  const split = v => v.split(',').map(s => s.trim()).filter(Boolean);
+  const pick = type => live.filter(f => f.type === type).map(f => f.value.trim());
+  const ints = type => live.filter(f => f.type === type)
+    .flatMap(f => splitList(f.value))
+    .map(Number)
+    .filter(Number.isInteger);
 
-  const contains = live.filter(f => f.type === 'urlContains').map(f => f.value.trim());
-  const regexes = live.filter(f => f.type === 'urlRegex').map(f => f.value.trim());
-  const excluded = live.filter(f => f.type === 'excludeDomain').flatMap(f => split(f.value));
   const types = live.filter(f => f.type === 'resourceType')
-    .flatMap(f => split(f.value).map(t => t.toLowerCase()))
-    .filter(t => RESOURCE_TYPES.includes(t));
+    .flatMap(f => splitList(f.value).map(t => t.toLowerCase()))
+    .filter(t => (knownTypes || RESOURCE_TYPES).includes(t));
 
-  const base = { resourceTypes: types.length ? [...new Set(types)] : RESOURCE_TYPES };
-  if (excluded.length) base.excludedRequestDomains = [...new Set(excluded)];
-
-  const conditions = [];
-  for (const value of contains) conditions.push({ ...base, urlFilter: value });
-  for (const value of regexes) conditions.push({ ...base, regexFilter: value });
-  if (!conditions.length) conditions.push({ ...base });
-  return conditions;
+  return {
+    contains: pick('urlContains'),
+    regexes: pick('urlRegex'),
+    excludeContains: pick('excludeUrlContains'),
+    excludeRegexes: pick('excludeUrlRegex'),
+    excludeDomains: live.filter(f => f.type === 'excludeDomain')
+      .flatMap(f => splitList(f.value).map(d => d.toLowerCase())),
+    types: [...new Set(types)],
+    tabIds: [...new Set(ints('tabId'))],
+    windowIds: [...new Set(ints('windowId'))]
+  };
 }
 
-export function buildRules(state) {
-  const rules = [];
-  if (state.paused) return rules;
-
-  let id = 1;
-  for (const profile of state.profiles) {
-    if (!profile.enabled) continue;
-    const { req, res } = activeHeaders(profile);
-    if (!req.length && !res.length) continue;
-
-    const action = { type: 'modifyHeaders' };
-    if (req.length) action.requestHeaders = req.map(toHeaderInfo);
-    if (res.length) action.responseHeaders = res.map(toHeaderInfo);
-
-    for (const condition of buildConditions(profile)) {
-      rules.push({
-        id: id++,
-        priority: 1,
-        action,
-        condition,
-        __profile: profile.name
-      });
-    }
-  }
-  return rules;
-}
-
-/* Strips the bookkeeping field before handing a rule to Chrome. */
-export function stripMeta(rule) {
-  const { __profile, ...clean } = rule;
-  return clean;
+export function hasTabScope(profile) {
+  const parsed = parseFilters(profile);
+  return parsed.tabIds.length > 0 || parsed.windowIds.length > 0;
 }

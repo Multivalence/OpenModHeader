@@ -1,76 +1,108 @@
 /* OpenModHeader — Firefox background event page.
 
-   Firefox keeps the blocking webRequest API in Manifest V3, so this build
-   edits headers directly in JavaScript instead of compiling declarative
-   rules. That buys three things the Chrome build cannot have: header names
-   keep the capitalisation you type, `append` works on any header, and there
-   is no cap on how many rules you can define. */
+   Firefox keeps blocking webRequest in Manifest V3, so this build edits
+   traffic directly in JavaScript. That lets it do three things the Chrome
+   build cannot: merge cookies against the real outgoing header, scope URL
+   exclusions to a single profile, and keep header capitalisation. */
 
 import {
   api, loadState, saveState, countActiveHeaders,
+  planProfile, profileIsActive, parseFilters,
   RESOURCE_TYPES, GECKO_RESOURCE_TYPES
 } from './common.js';
 
-const KNOWN_TYPES = new Set([...RESOURCE_TYPES, ...GECKO_RESOURCE_TYPES]);
+const KNOWN_TYPES = [...RESOURCE_TYPES, ...GECKO_RESOURCE_TYPES];
 
 let compiled = [];
 let settled = false;
 let ready = refresh();
 
+/* tabId -> windowId, so window filters can be resolved synchronously
+   inside a blocking listener. */
+const tabWindows = new Map();
+
+async function indexTabs() {
+  try {
+    const tabs = await api.tabs.query({});
+    tabWindows.clear();
+    for (const tab of tabs) tabWindows.set(tab.id, tab.windowId);
+  } catch {
+    /* Without tab access, window filters match nothing. */
+  }
+}
+
 /* ---------------------------------------------------------------- *
  * Compiling profiles into matchers
  * ---------------------------------------------------------------- */
 
-function isLive(header) {
-  return header.enabled && header.name.trim().length > 0;
+function safeRegexes(patterns) {
+  const out = [];
+  for (const pattern of patterns) {
+    try {
+      out.push(new RegExp(pattern));
+    } catch {
+      /* Half-typed regexes are normal. Skip rather than break the profile. */
+    }
+  }
+  return out;
 }
 
 function compileProfile(profile) {
-  const requestOps = (profile.requestHeaders || []).filter(isLive);
-  const responseOps = (profile.responseHeaders || []).filter(isLive);
-  if (!requestOps.length && !responseOps.length) return null;
+  if (!profileIsActive(profile)) return null;
 
-  const live = (profile.filters || []).filter(f => f.enabled && f.value.trim());
-  const split = value => value.split(',').map(s => s.trim()).filter(Boolean);
+  const plan = planProfile(profile);
+  const parsed = parseFilters(profile, KNOWN_TYPES);
 
-  const contains = live.filter(f => f.type === 'urlContains').map(f => f.value.trim());
-  const excluded = live.filter(f => f.type === 'excludeDomain')
-    .flatMap(f => split(f.value).map(d => d.toLowerCase()));
-  const types = live.filter(f => f.type === 'resourceType')
-    .flatMap(f => split(f.value).map(t => t.toLowerCase()))
-    .filter(t => KNOWN_TYPES.has(t));
+  const regexes = safeRegexes(parsed.regexes);
+  const excludeRegexes = safeRegexes(parsed.excludeRegexes);
+  const unscoped = !parsed.contains.length && !regexes.length;
+  const scopesTabs = parsed.tabIds.length > 0 || parsed.windowIds.length > 0;
 
-  const regexes = [];
-  for (const filter of live.filter(f => f.type === 'urlRegex')) {
-    try {
-      regexes.push(new RegExp(filter.value.trim()));
-    } catch {
-      /* An unfinished regex is normal while someone is still typing it.
-         Skip it rather than taking the whole profile down. */
-    }
-  }
-
-  const unscoped = !contains.length && !regexes.length;
+  const redirects = plan.redirects.map(redirect => ({
+    to: redirect.to,
+    test: redirect.type === 'regex' ? safeRegexes([redirect.from])[0] : null,
+    needle: redirect.type === 'regex' ? null : redirect.from
+  })).filter(r => r.test || r.needle);
 
   function matches(details) {
-    if (types.length && !types.includes(details.type)) return false;
+    if (parsed.types.length && !parsed.types.includes(details.type)) return false;
 
-    if (excluded.length) {
+    if (scopesTabs) {
+      const tabId = details.tabId;
+      if (tabId === undefined || tabId < 0) return false;
+      const inTab = parsed.tabIds.includes(tabId);
+      const inWindow = parsed.windowIds.includes(tabWindows.get(tabId));
+      if (!inTab && !inWindow) return false;
+    }
+
+    const url = details.url;
+
+    if (parsed.excludeDomains.length) {
       let host = '';
       try {
-        host = new URL(details.url).hostname.toLowerCase();
+        host = new URL(url).hostname.toLowerCase();
       } catch {
         return false;
       }
-      if (excluded.some(domain => host === domain || host.endsWith(`.${domain}`))) return false;
+      if (parsed.excludeDomains.some(d => host === d || host.endsWith(`.${d}`))) return false;
     }
 
+    if (parsed.excludeContains.some(needle => url.includes(needle))) return false;
+    if (excludeRegexes.some(pattern => pattern.test(url))) return false;
+
     if (unscoped) return true;
-    return contains.some(needle => details.url.includes(needle))
-      || regexes.some(pattern => pattern.test(details.url));
+    return parsed.contains.some(needle => url.includes(needle))
+      || regexes.some(pattern => pattern.test(url));
   }
 
-  return { requestOps, responseOps, matches };
+  return {
+    requestOps: plan.requestOps,
+    responseOps: plan.responseOps,
+    requestCookies: plan.requestCookies,
+    cookieMode: plan.cookieMode,
+    redirects,
+    matches
+  };
 }
 
 async function refresh() {
@@ -110,15 +142,42 @@ function applyOne(headers, op) {
   return headers;
 }
 
-/* Returns a new header array, or null when no profile matched — returning
-   null lets the request through untouched instead of rewriting it needlessly. */
+/* Merges named cookies into whatever the browser was already sending,
+   overwriting same-name entries instead of duplicating them. */
+function mergeCookies(currentValue, cookies) {
+  const jar = new Map();
+  for (const part of String(currentValue || '').split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    const name = part.slice(0, eq).trim();
+    if (name) jar.set(name, part.slice(eq + 1).trim());
+  }
+  for (const cookie of cookies) jar.set(cookie.name, cookie.value);
+  return [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
+}
+
+function applyCookies(headers, cookies, mode) {
+  const existing = headers.find(h => h.name.toLowerCase() === 'cookie');
+  const value = mode === 'replace'
+    ? cookies.map(c => `${c.name}=${c.value}`).join('; ')
+    : mergeCookies(existing?.value, cookies);
+
+  if (existing) existing.value = value;
+  else headers.push({ name: 'Cookie', value });
+  return headers;
+}
+
 function rewrite(details, kind, headers) {
   let result = null;
   for (const profile of compiled) {
     const ops = kind === 'request' ? profile.requestOps : profile.responseOps;
-    if (!ops.length || !profile.matches(details)) continue;
+    const cookies = kind === 'request' ? profile.requestCookies : [];
+    if (!ops.length && !cookies.length) continue;
+    if (!profile.matches(details)) continue;
+
     if (!result) result = headers.map(header => ({ ...header }));
     for (const op of ops) result = applyOne(result, op);
+    if (cookies.length) result = applyCookies(result, cookies, profile.cookieMode);
   }
   return result;
 }
@@ -134,13 +193,58 @@ function handler(kind) {
   };
 
   return details => {
-    /* Firefox lets a blocking listener return a promise. That matters here:
-       when the event page has just been revived it holds the request until
-       stored profiles are loaded, rather than letting it slip through. */
+    /* Firefox lets a blocking listener return a promise. When the event
+       page has just been revived this holds the request until the stored
+       profiles are loaded, instead of letting it slip through unmodified. */
     if (settled) return run(details);
     return ready.then(() => run(details));
   };
 }
+
+/* ---------------------------------------------------------------- *
+ * Redirects
+ * ---------------------------------------------------------------- */
+
+function expandSubstitution(template) {
+  // Chrome's regexSubstitution uses \1; JS replace wants $1.
+  return template.replace(/\\(\d)/g, '$$$1');
+}
+
+function findRedirect(details) {
+  for (const profile of compiled) {
+    if (!profile.redirects.length || !profile.matches(details)) continue;
+    for (const redirect of profile.redirects) {
+      if (redirect.needle) {
+        if (details.url.includes(redirect.needle)) return redirect.to;
+      } else if (redirect.test?.test(details.url)) {
+        return details.url.replace(redirect.test, expandSubstitution(redirect.to));
+      }
+    }
+  }
+  return null;
+}
+
+function onBeforeRequest(details) {
+  const run = () => {
+    if (!compiled.length) return {};
+    const target = findRedirect(details);
+    // Redirecting to the same URL would loop forever.
+    if (!target || target === details.url) return {};
+    return { redirectUrl: target };
+  };
+  if (settled) return run();
+  return ready.then(run);
+}
+
+/* ---------------------------------------------------------------- *
+ * Listeners
+ * ---------------------------------------------------------------- */
+
+api.webRequest.onBeforeRequest.addListener(
+  onBeforeRequest,
+  { urls: ['<all_urls>'] },
+  ['blocking']
+);
 
 api.webRequest.onBeforeSendHeaders.addListener(
   handler('request'),
@@ -171,8 +275,8 @@ async function updateBadge(state) {
     await api.action.setBadgeBackgroundColor({ color: profile?.color || '#B4470E' });
     await api.action.setTitle({
       title: count
-        ? `OpenModHeader — ${count} header${count === 1 ? '' : 's'} active`
-        : 'OpenModHeader — no headers active'
+        ? `OpenModHeader — ${count} rule${count === 1 ? '' : 's'} active`
+        : 'OpenModHeader — nothing active'
     });
   }
 
@@ -188,16 +292,19 @@ function reload() {
 }
 
 api.storage.onChanged.addListener((changes, area) => {
-  // Only react to the state key — the popup writes other keys too.
   if (area === 'local' && changes.state) reload();
 });
 
-api.runtime.onInstalled.addListener(reload);
-api.runtime.onStartup.addListener(reload);
+api.runtime.onInstalled.addListener(() => indexTabs().then(reload));
+api.runtime.onStartup.addListener(() => indexTabs().then(reload));
 
 /* Site access can be granted or taken away long after install. */
 api.permissions.onAdded.addListener(reload);
 api.permissions.onRemoved.addListener(reload);
+
+api.tabs.onCreated.addListener(tab => tabWindows.set(tab.id, tab.windowId));
+api.tabs.onRemoved.addListener(tabId => tabWindows.delete(tabId));
+api.tabs.onAttached.addListener((tabId, info) => tabWindows.set(tabId, info.newWindowId));
 
 api.commands.onCommand.addListener(async command => {
   if (command !== 'toggle-pause') return;
@@ -205,3 +312,5 @@ api.commands.onCommand.addListener(async command => {
   state.paused = !state.paused;
   await saveState(state); // storage.onChanged triggers reload
 });
+
+indexTabs();

@@ -20,22 +20,43 @@ Built on Manifest V3 for both Chrome and Firefox. No account, no telemetry, no n
 **Header editing**
 - Set, append, or remove headers on both requests and responses
 - Enable or disable any single header without deleting it
-- Live count of active headers on the toolbar badge
+- Attach a comment to any row as a note to yourself
+- Autocomplete for common request and response header names
+- Live count of active rules on the toolbar badge
+
+**Cookie editor**
+- Edit individual cookies instead of hand-writing the whole `Cookie` header
+- Request cookies merge with what the browser already sends, or replace it entirely
+- Response cookies become `Set-Cookie` with full attribute control: Path, Domain, Max-Age, SameSite, Secure, HttpOnly
+
+**Content-Security-Policy editor**
+- Leave CSP alone, strip it entirely, or replace it with a policy you compose
+- Build the policy one directive at a time with autocomplete for standard directive names
+- Live preview of the exact header that will be sent
+- Toggle between enforcing and `Report-Only`
+
+**Redirects**
+- Send matching requests somewhere else — handy for pointing a CDN asset at localhost
+- Match by substring or regex, with `\\1` capture-group substitution in the target
 
 **Profiles**
 - Unlimited independent header sets, each with its own name and colour
 - All enabled profiles apply at once, so you can layer an auth-token profile over a feature-flag profile
 - Duplicate, rename, recolour, and delete from the profile menu
 
-**URL filtering**
+**Filtering**
 - `URL contains` — plain substring match
 - `URL matches regex` — full regular expression
+- `Exclude URL containing` / `Exclude URL regex` — carve exceptions out of a match
 - `Exclude domains` — skip named domains and their subdomains
 - `Resource types` — restrict to `xmlhttprequest`, `main_frame`, `script`, and so on
+- `Tab` / `Window` — scope a profile to one tab or window, with a **Use current** button that fills in the id for you
 - Leave filters empty and the profile applies everywhere
 
 **Everything else**
 - Global on/off switch, plus `Alt+Shift+H` from anywhere
+- Undo with `Ctrl+Z` (or the toolbar arrow) — 40 steps of history
+- Profile search once you have more than five profiles
 - Export and import profiles as JSON to share a setup or check it into a repo
 - Open the popup in a full browser tab when you're editing a lot at once
 - Follows your system light/dark theme
@@ -137,8 +158,14 @@ Chrome removed blocking `webRequest` in Manifest V3, so the Chrome build uses `d
 |---|---|---|
 | Header name capitalisation | Lowercased by the browser | Kept exactly as you type it |
 | `append` on request headers | Only ~20 allowlisted headers | Any header |
+| Request cookie **merge** | Appended — a duplicate name is sent twice | True merge, same name overwritten |
+| **Exclude URL** filters | Suppress every profile's rules for that request | Scoped to the profile that defines them |
 | Rule ceiling | 5000 rules, 1000 with regex | No ceiling |
 | Site access | Granted at install, permanent | Revocable at any time |
+
+Both differences come from the same root cause: Chrome's `declarativeNetRequest` cannot read a request before deciding what to do with it, while Firefox's `webRequest` can. If a duplicate cookie matters to you on Chrome, use **Replace all cookies** instead of merge.
+
+Tab and window filters work on both, but on Chrome they compile to session rules — `tabIds` is only supported there — which means a tab-scoped profile is rebuilt from scratch when the browser restarts. Tab ids don't survive a restart either, so re-capture them with **Use current**.
 
 Chrome's `append` allowlist is: `accept`, `accept-encoding`, `accept-language`, `access-control-request-headers`, `cache-control`, `connection`, `content-language`, `cookie`, `forwarded`, `if-match`, `if-none-match`, `keep-alive`, `range`, `te`, `trailer`, `transfer-encoding`, `upgrade`, `user-agent`, `via`, `want-digest`, `x-forwarded-for`. Rows that break this rule get a red outline in the popup — use `set` instead. Response headers can be appended freely on both browsers.
 
@@ -151,6 +178,8 @@ Chrome's `append` allowlist is: `accept`, `accept-encoding`, `accept-language`, 
 - **A few headers can't be modified.** Both browsers reserve some for their own use. On Chrome, the reason appears in the status bar at the bottom of the popup.
 - **Profiles are stored locally, not synced.** They stay on the machine you created them on. Use export and import to move them.
 - **This is a developer tool.** Setting `Authorization` or `Cookie` headers globally will send your credentials to every site you visit. Scope those profiles with a URL filter.
+- **Removing CSP weakens the page you're testing.** It's the right tool for debugging a policy that blocks your tooling, but scope it to the site you're working on rather than leaving it on everywhere.
+- **Redirects apply before headers.** A request that gets redirected is matched again at its new URL, so a profile filtered on the old host won't touch the redirected request.
 
 ---
 
