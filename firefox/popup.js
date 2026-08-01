@@ -1198,22 +1198,25 @@ async function importFile(file) {
      mode the file was written with. */
   const values = carriesSecrets.values;
   for (const profile of incoming.profiles) {
-    for (const key of ['requestHeaders', 'responseHeaders']) {
-      for (const header of profile[key]) {
-        if (!isSensitiveHeader(header)) continue;
-        header.sensitive = true;
-        if (header.operation === 'remove') continue;
+    for (const key of ['requestHeaders', 'responseHeaders', 'cookies']) {
+      for (const item of profile[key]) {
+        const sensitive = key === 'cookies'
+          ? isSensitiveCookie(item)
+          : isSensitiveHeader(item);
+        if (!sensitive) continue;
+        item.sensitive = true;
+        if (item.operation === 'remove') continue;   // headers only
 
-        const imported = values.get(`${profile.name}\u0000${header.name}`);
+        const imported = values.get(`${profile.name}\u0000${key}\u0000${item.name}`);
         if (imported != null && imported !== '') {
-          header.secretId = header.secretId || blankSecretId();
-          await sec.storeImportedSecret(header.secretId, imported, state);
-          header.requiresCredential = false;
+          item.secretId = item.secretId || blankSecretId();
+          await sec.storeImportedSecret(item.secretId, imported, state);
+          item.requiresCredential = false;
         } else {
-          header.requiresCredential = true;
-          if (!header.secretId) header.secretId = null;
+          item.requiresCredential = true;
+          if (!item.secretId) item.secretId = null;
         }
-        header.value = '';
+        item.value = '';
       }
     }
     /* An imported profile never inherits a global-sensitive override; it must
@@ -1242,12 +1245,17 @@ function collectImportedSecrets(parsed) {
   let count = 0;
   const profiles = Array.isArray(parsed) ? parsed : (parsed?.profiles || []);
   for (const profile of profiles) {
-    for (const key of ['requestHeaders', 'responseHeaders']) {
-      for (const header of profile?.[key] || []) {
-        if (!isSensitiveHeader(header)) continue;
-        const value = header.value;
+    for (const key of ['requestHeaders', 'responseHeaders', 'cookies']) {
+      for (const item of profile?.[key] || []) {
+        const sensitive = key === 'cookies'
+          ? isSensitiveCookie(item)
+          : isSensitiveHeader(item);
+        if (!sensitive) continue;
+        const value = item.value;
         if (typeof value === 'string' && value !== '') {
-          values.set(`${profile.name}\u0000${header.name}`, value);
+          /* Keyed by section as well as name, so a header and a cookie that
+             happen to share a name cannot collide. */
+          values.set(`${profile.name}\u0000${key}\u0000${item.name}`, value);
           count++;
         }
       }

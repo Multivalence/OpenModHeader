@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenModHeader",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Add, rewrite, and remove HTTP request and response headers. Organise rules into profiles and scope them with URL filters.",
   "minimum_chrome_version": "111",
   "permissions": [

@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "OpenModHeader",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Add, rewrite, and remove HTTP request and response headers. Organise rules into profiles and scope them with URL filters.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "openmodheader@openmodheader.local",
+      "id": "openmodheader2@openmodheader2",
       "strict_min_version": "115.0",
       "data_collection_permissions": {
         "required": [

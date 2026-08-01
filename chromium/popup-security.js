@@ -359,15 +359,17 @@ export async function buildExportPayload(state, { includeSecrets = false } = {})
   const profiles = structuredClone(state.profiles);
 
   for (const profile of profiles) {
-    for (const key of ['requestHeaders', 'responseHeaders']) {
-      for (const header of profile[key] || []) {
-        if (!header.secretId) continue;
-        if (includeSecrets && Object.hasOwn(secrets, header.secretId)) {
-          header.value = secrets[header.secretId];
-          header.requiresCredential = false;
+    for (const key of ['requestHeaders', 'responseHeaders', 'cookies']) {
+      for (const item of profile[key] || []) {
+        if (!item.secretId) continue;
+        if (includeSecrets && Object.hasOwn(secrets, item.secretId)) {
+          item.value = secrets[item.secretId];
+          item.requiresCredential = false;
         } else {
-          header.value = null;
-          header.requiresCredential = true;
+          /* A null value plus the flag is the placeholder an import reads to
+             know the profile should arrive locked. */
+          item.value = null;
+          item.requiresCredential = true;
         }
       }
     }
@@ -481,11 +483,19 @@ export async function chooseCopyMode() {
  * Duplication
  * ---------------------------------------------------------------- */
 
-export async function chooseDuplicationMode(profile) {
-  const sensitive = [...(profile.requestHeaders || []), ...(profile.responseHeaders || [])]
-    .filter(h => h.secretId);
+/* Anything holding a secret reference counts — headers and cookies alike. A
+   profile whose only credential is a session cookie must still ask, otherwise
+   the copy would silently share it. */
+export function credentialBearingItems(profile) {
+  return [
+    ...(profile.requestHeaders || []),
+    ...(profile.responseHeaders || []),
+    ...(profile.cookies || [])
+  ].filter(item => item.secretId);
+}
 
-  if (!sensitive.length) return 'config';
+export async function chooseDuplicationMode(profile) {
+  if (!credentialBearingItems(profile).length) return 'config';
 
   return chooseModal({
     title: `Duplicate "${profile.name}"`,
@@ -516,19 +526,19 @@ export async function chooseDuplicationMode(profile) {
    mode. Sharing keeps the same secretId so no second ciphertext is created. */
 export function applyDuplicationMode(copy, mode) {
   const created = [];
-  for (const key of ['requestHeaders', 'responseHeaders']) {
-    for (const header of copy[key] || []) {
-      if (!header.secretId) continue;
+  for (const key of ['requestHeaders', 'responseHeaders', 'cookies']) {
+    for (const item of copy[key] || []) {
+      if (!item.secretId) continue;
 
       if (mode === 'config') {
-        header.secretId = null;
-        header.requiresCredential = true;
-        header.value = '';
+        item.secretId = null;
+        item.requiresCredential = true;
+        item.value = '';
       } else if (mode === 'new') {
-        header.secretId = blankSecretId();
-        header.requiresCredential = true;
-        header.value = '';
-        created.push(header);
+        item.secretId = blankSecretId();
+        item.requiresCredential = true;
+        item.value = '';
+        created.push(item);
       }
       /* mode === 'share' keeps the existing secretId untouched. */
     }
