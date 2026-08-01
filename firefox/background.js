@@ -65,18 +65,22 @@ function compileProfile(profile, { secrets, settings, unlocked }) {
   const sensitiveNames = new Set(
     sensitiveHeadersOf(profile).map(h => h.name.trim().toLowerCase())
   );
-  const cookiesAreSensitive = profileHasSensitiveContent(profile)
-    && plan.requestCookies.length > 0;
+  const cookiesAreSensitive = plan.requestCookies.some(c => c.sensitive);
 
   /* When the profile is blocked, strip the credential-bearing operations but
      keep everything else — this is the "skip only the protected op" rule. */
   const keep = ops => verdict.blocked
-    ? ops.filter(op => !sensitiveNames.has(op.name.trim().toLowerCase()))
+    ? ops.filter(op => op.sensitive !== true
+        && !sensitiveNames.has(op.name.trim().toLowerCase()))
     : ops;
 
   const requestOps = keep(plan.requestOps);
   const responseOps = keep(plan.responseOps);
-  const requestCookies = (verdict.blocked && cookiesAreSensitive) ? [] : plan.requestCookies;
+  /* Firefox can be precise here: drop only the credential cookies and still
+     send the ordinary ones in the same Cookie header. */
+  const requestCookies = verdict.blocked
+    ? plan.requestCookies.filter(c => !c.sensitive)
+    : plan.requestCookies;
 
   if (!requestOps.length && !responseOps.length && !requestCookies.length && !plan.redirects.length) {
     return null;

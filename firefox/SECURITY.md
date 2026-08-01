@@ -16,8 +16,25 @@ These names are recognised case-insensitively:
 Vendor-specific variants are matched by pattern, so `X-Acme-Api-Key`,
 `X-Session-Token`, `X-Refresh-Token` and similar names are also protected.
 
-Cookies created in the Cookie editor are credential-bearing by construction,
-since they compose the `Cookie` and `Set-Cookie` headers.
+### Cookies
+
+Cookies get exactly the same treatment as headers, because a session cookie is
+as much a credential as a bearer token.
+
+These cookie names are recognised case-insensitively: `session`, `sessionid`,
+`sid`, `sess`, `auth`, `token`, `access_token`, `refresh_token`, `jwt`,
+`bearer`, `csrf`, `xsrf`, `remember_token`, `connect.sid`, `jsessionid`,
+`phpsessid`, `laravel_session`, and similar. Patterns also catch names ending
+in `_token`, `_auth`, `_secret`, `_key`, or containing a session id.
+
+A recognised cookie's value moves into the secret store: it is encrypted in
+vault mode, cleared on lock, revealed with the eye button, and omitted from
+exports by default — all identically to a credential header.
+
+Ordinary cookies such as `locale` or `theme` keep their value inline and are
+not gated, because forcing a passphrase on a language preference would be
+noise. Any cookie can be marked as a credential with the shield button on its
+row when the built-in list does not recognise it.
 
 **You can mark any header as a credential yourself.** Every header row has a
 shield button; clicking it moves that header under credential handling even if

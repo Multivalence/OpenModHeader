@@ -2,7 +2,9 @@
    Byte-identical in the chrome/ and firefox/ builds. */
 
 import { api } from './common-api.js';
-import { isSensitiveHeader, normalizeSettings, DEFAULT_SETTINGS } from './security.js';
+import {
+  isSensitiveHeader, isSensitiveCookie, normalizeSettings, DEFAULT_SETTINGS
+} from './security.js';
 
 export { api };
 
@@ -114,7 +116,10 @@ export function blankCookie() {
   return {
     id: uid(), enabled: true, target: 'request', name: '', value: '',
     path: '', domain: '', maxAge: '', secure: false, httpOnly: false,
-    sameSite: '', comment: ''
+    sameSite: '', comment: '',
+    /* Same model as headers: a credential-bearing cookie keeps no inline
+       value, only a reference into the secret store. */
+    sensitive: false, secretId: null, requiresCredential: false
   };
 }
 
@@ -216,9 +221,9 @@ function normalizeSecretsMeta(raw, profiles) {
 export function collectSecretIds(state) {
   const ids = [];
   for (const profile of state.profiles || []) {
-    for (const list of [profile.requestHeaders, profile.responseHeaders]) {
-      for (const header of list || []) {
-        if (header.secretId) ids.push(header.secretId);
+    for (const list of [profile.requestHeaders, profile.responseHeaders, profile.cookies]) {
+      for (const item of list || []) {
+        if (item.secretId) ids.push(item.secretId);
       }
     }
   }
@@ -228,9 +233,9 @@ export function collectSecretIds(state) {
 export function secretRefCount(state, secretId) {
   let count = 0;
   for (const profile of state.profiles || []) {
-    for (const list of [profile.requestHeaders, profile.responseHeaders]) {
-      for (const header of list || []) {
-        if (header.secretId === secretId) count++;
+    for (const list of [profile.requestHeaders, profile.responseHeaders, profile.cookies]) {
+      for (const item of list || []) {
+        if (item.secretId === secretId) count++;
       }
     }
   }
@@ -288,14 +293,17 @@ function normalizeCookies(list) {
       enabled: c.enabled !== false,
       target: c.target === 'response' ? 'response' : 'request',
       name: str(c.name).trim(),
-      value: str(c.value),
+      value: c.secretId ? '' : str(c.value),
       path: str(c.path).trim(),
       domain: str(c.domain).trim(),
       maxAge: str(c.maxAge).trim(),
       secure: !!c.secure,
       httpOnly: !!c.httpOnly,
       sameSite: SAME_SITE_VALUES.includes(c.sameSite) ? c.sameSite : '',
-      comment: str(c.comment)
+      comment: str(c.comment),
+      sensitive: c.sensitive === true || isSensitiveCookie({ name: str(c.name) }),
+      secretId: typeof c.secretId === 'string' && c.secretId ? c.secretId : null,
+      requiresCredential: c.requiresCredential === true
     };
   }).filter(Boolean);
 }
@@ -368,6 +376,12 @@ export function findLegacySensitiveHeaders(raw) {
         found.push({ profileId: profile.id, profileName: profile.name, section: key, headerId: header.id, name: header.name });
       }
     }
+    for (const cookie of profile.cookies || []) {
+      if (cookie.secretId) continue;
+      if (!isSensitiveCookie(cookie)) continue;
+      if (!String(cookie.value ?? '')) continue;
+      found.push({ profileId: profile.id, profileName: profile.name, section: 'cookies', headerId: cookie.id, name: cookie.name });
+    }
   }
   return found;
 }
@@ -409,6 +423,27 @@ export function migrateToV3(raw) {
           createdAt: Date.now()
         };
       }
+    }
+
+    /* Cookies follow the same path: credential-bearing ones move into the
+       secret store, ordinary ones keep their inline value. */
+    for (const cookie of profile.cookies) {
+      if (!isSensitiveCookie(cookie)) continue;
+      if (cookie.secretId) continue;
+
+      const value = String(cookie.value ?? '');
+      cookie.sensitive = true;
+
+      const secretId = blankSecretId();
+      cookie.secretId = secretId;
+      cookie.value = '';
+      cookie.requiresCredential = value === '';
+      if (value) extracted[secretId] = value;
+
+      state.secretsMeta[secretId] = {
+        label: `${profile.name} \u00B7 cookie ${cookie.name}`,
+        createdAt: Date.now()
+      };
     }
   }
 
@@ -491,12 +526,42 @@ export function planProfile(profile, resolve = null) {
   const responseOps = profile.responseHeaders.filter(isLive).map(withSecret).filter(Boolean);
 
   const cookies = profile.cookies || [];
-  const requestCookies = cookies
-    .filter(c => c.enabled && c.target === 'request' && c.name.trim())
-    .map(c => ({ name: c.name.trim(), value: c.value }));
+
+  /* Resolves a cookie's value the same way a header's is resolved. A
+     credential cookie whose secret is unavailable is dropped rather than sent
+     with an empty or stale value. */
+  const cookieValue = cookie => {
+    if (!cookie.secretId) {
+      if (isSensitiveCookie(cookie)) {
+        missing.push(`unmanaged:cookie:${cookie.name.trim().toLowerCase()}`);
+        return null;
+      }
+      return cookie.value;
+    }
+    const value = resolve ? resolve(cookie.secretId) : undefined;
+    if (value == null || value === '') {
+      missing.push(cookie.secretId);
+      return null;
+    }
+    return value;
+  };
+
+  const requestCookies = [];
+  for (const cookie of cookies.filter(c => c.enabled && c.target === 'request' && c.name.trim())) {
+    const value = cookieValue(cookie);
+    if (value == null) continue;
+    requestCookies.push({ name: cookie.name.trim(), value, sensitive: isSensitiveCookie(cookie) });
+  }
 
   for (const cookie of cookies.filter(c => c.enabled && c.target === 'response' && c.name.trim())) {
-    responseOps.push({ name: 'Set-Cookie', value: serializeCookie(cookie), operation: 'append' });
+    const value = cookieValue(cookie);
+    if (value == null) continue;
+    responseOps.push({
+      name: 'Set-Cookie',
+      value: serializeCookie({ ...cookie, value }),
+      operation: 'append',
+      sensitive: isSensitiveCookie(cookie)
+    });
   }
 
   const csp = profile.csp || blankCsp();

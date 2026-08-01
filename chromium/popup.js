@@ -8,7 +8,8 @@ import {
   APPENDABLE_REQUEST_HEADERS, buildCspPolicy, countActiveHeaders, planProfile
 } from './common.js';
 import {
-  isSensitiveHeader, isSensitiveHeaderName, evaluateProfile, describeBlock
+  isSensitiveHeader, isSensitiveHeaderName, isSensitiveCookie, isSensitiveCookieName,
+  evaluateProfile, describeBlock
 } from './security.js';
 import {
   resolveSecrets, isUnlocked, lock, noteActivity, ACTIVITY, deleteSecret
@@ -92,7 +93,7 @@ function profileIsLocked(profile) {
 function profileUsesCredentials(profile) {
   const headers = [...(profile.requestHeaders || []), ...(profile.responseHeaders || [])];
   if (headers.some(h => isSensitiveHeader(h) && h.operation !== 'remove')) return true;
-  return (profile.cookies || []).some(c => c.enabled && c.name.trim());
+  return (profile.cookies || []).some(c => c.enabled && c.name.trim() && isSensitiveCookie(c));
 }
 
 function activeProfile() {
@@ -496,7 +497,7 @@ function credentialToggle(header) {
 /* The only entry point for editing a credential from a header row. Stored
    credentials get a separate reveal action so viewing and replacing are
    distinct, deliberate choices. */
-function credentialChip(profile, header) {
+function credentialChip(profile, header, listKey = null) {
   const stored = header.secretId && secretIds.has(header.secretId);
   const shared = header.secretId && secretRefCount(state, header.secretId) > 1;
 
@@ -579,7 +580,7 @@ function renderCookies(content, profile) {
 
 function cookieRow(profile, cookie) {
   const row = el('div', { class: `row${cookie.enabled ? '' : ' disabled'}` });
-  const wrapper = el('div', { class: 'row-group' }, row);
+  const wrapper = el('div', { class: 'row-group', dataset: { id: cookie.id } }, row);
 
   const attrsId = `${cookie.id}-attrs`;
 
@@ -621,7 +622,27 @@ function cookieRow(profile, cookie) {
     ));
   };
 
-  row.append(
+  const sensitive = isSensitiveCookie(cookie);
+  const shown = revealedHeaders.has(cookie.id) && revealedValues.has(cookie.id);
+
+  /* A credential cookie behaves exactly like a credential header: the value
+     lives in the secret store, and the field here is a placeholder. */
+  const valueInput = sensitive
+    ? textInput({
+        class: `h-value${shown ? ' revealed' : ''}`,
+        placeholder: cookie.secretId && secretIds.has(cookie.secretId)
+          ? '\u2022'.repeat(10) + '  (stored)'
+          : 'credential required',
+        value: shown ? revealedValues.get(cookie.id) : '',
+        readonly: shown ? true : null,
+        disabled: shown ? null : true
+      })
+    : textInput({
+        class: 'h-value', placeholder: 'value', value: cookie.value,
+        oninput: event => { cookie.value = event.target.value; touch(); }
+      });
+
+  appendKids(row,
     checkbox(cookie, row),
     el('select', {
       class: 'op-select', title: 'Which header this cookie belongs to',
@@ -633,14 +654,30 @@ function cookieRow(profile, cookie) {
     el('div', { class: 'wire' },
       textInput({
         class: 'h-name', placeholder: 'cookie_name', value: cookie.name,
-        oninput: event => { cookie.name = event.target.value; touch(); }
+        oninput: event => {
+          const was = isSensitiveCookie(cookie);
+          cookie.name = event.target.value;
+          /* Typing a credential cookie name mid-edit swaps the row over, so a
+             secret is never typed into the profile object. */
+          if (isSensitiveCookie(cookie) !== was) {
+            const caret = event.target.selectionStart;
+            cookie.value = '';
+            restructure();
+            const again = $('content').querySelector(`.row-group[data-id="${cookie.id}"] .h-name`);
+            if (again) {
+              again.focus();
+              try { again.setSelectionRange(caret, caret); } catch { /* ignore */ }
+            }
+            return;
+          }
+          touch();
+        }
       }),
       el('span', { class: 'colon', text: '=' }),
-      textInput({
-        class: 'h-value', placeholder: 'value', value: cookie.value,
-        oninput: event => { cookie.value = event.target.value; touch(); }
-      })
+      valueInput
     ),
+    sensitive ? credentialChip(profile, cookie, 'cookies') : null,
+    cookieCredentialToggle(cookie),
     el('button', {
       class: 'note-btn', title: 'Cookie attributes',
       onclick: () => {
@@ -651,8 +688,29 @@ function cookieRow(profile, cookie) {
     deleteButton(profile, 'cookies', cookie)
   );
 
+  if (sensitive) row.classList.add('locked');
   renderAttrs();
   return wrapper;
+}
+
+/* Marks a cookie the built-in list does not recognise as credential-bearing. */
+function cookieCredentialToggle(cookie) {
+  const auto = isSensitiveCookieName(cookie.name);
+  const on = isSensitiveCookie(cookie);
+
+  return el('button', {
+    class: `mark-btn${on ? ' on' : ''}${auto ? ' locked-on' : ''}`,
+    title: auto
+      ? `${cookie.name} is always treated as a credential`
+      : (on ? 'Marked as a credential \u2014 click to unmark'
+            : 'Mark this cookie as a credential'),
+    onclick: () => {
+      if (auto) return flash(`${cookie.name} is always treated as a credential.`);
+      cookie.sensitive = !cookie.sensitive;
+      if (cookie.sensitive) cookie.value = '';
+      restructure();
+    }
+  }, icon('key', { size: 13 }));
 }
 
 /* ---------------------------------------------------------------- *

@@ -230,7 +230,7 @@ export async function promptCredential(header, state, { title = null, reveal = f
   }
 
   const value = await openModal({
-    title: title || `Credential for ${header.name || 'this header'}`,
+    title: title || `Credential for ${header.name || 'this entry'}`,
     build: body => {
       body.append(el('p', { class: 'muted', text: modeBlurb(settings) }));
       body.append(el('label', { class: 'field' },

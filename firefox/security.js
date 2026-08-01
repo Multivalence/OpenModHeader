@@ -30,6 +30,27 @@ export const SENSITIVE_HEADER_PATTERNS = [
   /(^|-)secret$/i
 ];
 
+/* Cookie names that carry session or auth state. Same extensible shape as the
+   header list: add a lowercase entry and everything else follows. */
+export const SENSITIVE_COOKIE_NAMES = new Set([
+  'session', 'sessionid', 'session_id', 'sess', 'sid',
+  'auth', 'authtoken', 'auth_token', 'token', 'access_token', 'refresh_token',
+  'jwt', 'bearer', 'csrf', 'csrftoken', 'csrf_token', 'xsrf', 'xsrf-token',
+  'remember_token', 'remember_me', 'connect.sid', 'jsessionid', 'phpsessid',
+  'asp.net_sessionid', 'laravel_session', '_session_id'
+]);
+
+export const SENSITIVE_COOKIE_PATTERNS = [
+  /sess(ion)?[-_]?id$/i,
+  /(^|[-_])token$/i,
+  /(^|[-_])auth$/i,
+  /(^|[-_])jwt$/i,
+  /(^|[-_])secret$/i,
+  /(^|[-_])key$/i,
+  /^_?csrf/i,
+  /^_?xsrf/i
+];
+
 export const CREDENTIAL_MODES = {
   session: {
     label: 'Session only',
@@ -87,6 +108,25 @@ export function isSensitiveHeaderName(name) {
   return SENSITIVE_HEADER_PATTERNS.some(pattern => pattern.test(key));
 }
 
+/* A cookie is a credential if its name matches the known set or patterns, or
+   the user marked it. As with headers, the flag can only add protection. */
+export function isSensitiveCookieName(name) {
+  const key = String(name ?? '').trim().toLowerCase();
+  if (!key) return false;
+  if (SENSITIVE_COOKIE_NAMES.has(key)) return true;
+  return SENSITIVE_COOKIE_PATTERNS.some(pattern => pattern.test(key));
+}
+
+export function isSensitiveCookie(cookie) {
+  if (!cookie) return false;
+  if (cookie.sensitive === true) return true;
+  return isSensitiveCookieName(cookie.name);
+}
+
+export function sensitiveCookiesOf(profile) {
+  return (profile.cookies || []).filter(isSensitiveCookie);
+}
+
 export function isSensitiveHeader(header) {
   if (!header) return false;
   if (header.sensitive === true) return true;
@@ -98,7 +138,10 @@ export function isSensitiveHeader(header) {
 export function profileHasSensitiveContent(profile) {
   const headers = [...(profile.requestHeaders || []), ...(profile.responseHeaders || [])];
   if (headers.some(isSensitiveHeader)) return true;
-  return (profile.cookies || []).some(cookie => cookie.enabled && cookie.name.trim());
+  /* Only credential-bearing cookies count. A `locale` cookie is not a secret,
+     and treating every cookie as one would force host filters and vault entry
+     on harmless values. Anything unrecognised can be marked by hand. */
+  return (profile.cookies || []).some(c => c.enabled && c.name.trim() && isSensitiveCookie(c));
 }
 
 export function sensitiveHeadersOf(profile) {
@@ -199,9 +242,12 @@ export function evaluateProfile(profile, settings, { unlocked = true, resolvedId
          from a hand-edited file or partially migrated data. The second case
          must never fall through to sending whatever inline value it carries. */
   if (resolvedIds) {
-    const needing = sensitive
-      .filter(h => h.enabled && h.name.trim())
-      .filter(h => h.operation !== 'remove');
+    const needing = [
+      ...sensitive
+        .filter(h => h.enabled && h.name.trim())
+        .filter(h => h.operation !== 'remove'),
+      ...sensitiveCookiesOf(profile).filter(c => c.enabled && c.name.trim())
+    ];
 
     const unresolvable = needing.filter(h => h.secretId && !resolvedIds.has(h.secretId));
     const unmanaged = needing.filter(h => !h.secretId);

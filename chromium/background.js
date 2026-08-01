@@ -125,14 +125,20 @@ export function buildRules(state, { secrets = {}, unlocked = true } = {}) {
     const sensitiveNames = new Set(
       sensitiveHeadersOf(profile).map(h => h.name.trim().toLowerCase())
     );
-    const cookiesAreSensitive = profileHasSensitiveContent(profile)
-      && plan.requestCookies.length > 0;
+    /* The Cookie header is a single header, so it cannot be split across two
+       rules. If any cookie in it is a credential, the whole header is routed
+       to the sensitive rule set. */
+    const cookiesAreSensitive = plan.requestCookies.some(c => c.sensitive);
 
     const splitOps = ops => {
       const plainOps = [];
       const secretOps = [];
       for (const op of ops) {
-        (sensitiveNames.has(op.name.trim().toLowerCase()) ? secretOps : plainOps).push(op);
+        /* `op.sensitive` is set for Set-Cookie ops built from a credential
+           cookie; otherwise fall back to the header-name check. */
+        const secret = op.sensitive === true
+          || sensitiveNames.has(op.name.trim().toLowerCase());
+        (secret ? secretOps : plainOps).push(op);
       }
       return { plainOps, secretOps };
     };
