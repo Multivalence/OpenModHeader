@@ -4,7 +4,7 @@
 
 Add, rewrite, and remove HTTP request and response headers from your browser toolbar. Group rules into profiles, scope them to the URLs you care about, and flip the whole thing off with one keystroke.
 
-Headers that carry credentials — `Authorization`, `Cookie`, API keys — are recognised on sight and handled apart from the rest of your configuration: encrypted behind a passphrase, or held in memory for a single session. See [Credential security](#credential-security).
+Headers and cookies that carry credentials — `Authorization`, API keys, session cookies — are recognised on sight and handled apart from the rest of your configuration: encrypted behind a passphrase, or held in memory for a single session. See [Credential security](#credential-security).
 
 Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no network calls — everything stays on your machine.
 
@@ -22,9 +22,10 @@ Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no
 ![The Request tab: rows set, appended, or removed, one disabled without being deleted, and an Authorization row whose token is stored as a credential with controls to reveal or replace it](images/screenshot-1-headers.png)
 
 **Credential security**
-- `Authorization`, `Cookie`, API keys and common vendor variants are recognised as credentials automatically — and the shield button on any row marks a header no list would guess
+- `Authorization`, `Cookie`, API keys and common vendor variants are recognised as credentials automatically — and the shield button on any row marks a header or cookie no list would guess
+- Session cookies, tokens and CSRF values from the Cookie editor go through the identical treatment; a `locale` cookie doesn't
 - Three storage modes: memory-only for the session (default), an encrypted vault behind a passphrase, or the original persistent plaintext if you need it
-- Credential headers stay inactive until their profile has a real URL or host filter, so a token can't be broadcast to every site you visit
+- Credential headers and cookies stay inactive until their profile has a real URL or host filter, so a token can't be broadcast to every site you visit
 - A warning when a credential profile targets a plain `http://` host
 - Lock from the title bar or let it auto-lock — locking freezes only the profiles holding credentials
 - Exports and clipboard copies omit credentials unless you ask otherwise
@@ -37,6 +38,7 @@ Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no
 - Edit individual cookies instead of hand-writing the whole `Cookie` header
 - Request cookies merge with what the browser already sends, or replace it entirely
 - Response cookies become `Set-Cookie` with full attribute control: Path, Domain, Max-Age, SameSite, Secure, HttpOnly
+- Session and token cookies are treated as credentials, exactly like a credential header — see [Credential security](#credential-security)
 
 **Content-Security-Policy editor**
 - Leave CSP alone, strip it entirely, or replace it with a policy you compose
@@ -165,9 +167,11 @@ Every enabled profile is live at the same time. When two profiles touch the same
 
 ## Credential security
 
-Some headers carry credentials. `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-API-Key`, `X-Auth-Token` and vendor variants like `X-Acme-Api-Key` are recognised case-insensitively. Any other header can be marked as a credential with the shield button on its row — no built-in list covers every vendor's naming. Cookies from the Cookie editor count by construction, since they compose `Cookie` and `Set-Cookie`.
+Some headers carry credentials. `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-API-Key`, `X-Auth-Token` and vendor variants like `X-Acme-Api-Key` are recognised case-insensitively. Any other header can be marked as a credential with the shield button on its row — no built-in list covers every vendor's naming.
 
-**A credential needs a host.** A rule with no URL filter applies to every request your browser makes. Harmless for `X-Debug: 1`; for `Authorization: Bearer …` it means your token goes to every site you visit, any of which can log it and replay it. So a credential-bearing header stays inactive until its profile has a meaningful URL or host filter — a bare `*`, `<all_urls>` or `^.*$` restricts nothing and doesn't count. If you genuinely need one everywhere, you can override it for that one profile without weakening the others. You're also warned when a credential profile targets a plain `http://` host, with `localhost`, `127.0.0.1`, `[::1]` and `*.local` exempt.
+**Cookies get exactly the same treatment**, because a session cookie is as much a credential as a bearer token. `session`, `sessionid`, `sid`, `token`, `access_token`, `refresh_token`, `jwt`, `csrf`, `jsessionid`, `phpsessid` and similar names are recognised, along with patterns catching anything ending in `_token`, `_auth`, `_secret` or `_key`. A recognised cookie's value moves into the secret store, where it is encrypted in vault mode, cleared on lock, revealed with the eye button, and omitted from exports — all identically to a credential header, and gated by the same host requirement below. Ordinary cookies like `locale` or `theme` keep their value inline and aren't gated, since forcing a passphrase on a language preference would be noise. The shield button covers anything the list doesn't recognise.
+
+**A credential needs a host.** A rule with no URL filter applies to every request your browser makes. Harmless for `X-Debug: 1`; for `Authorization: Bearer …` or a session cookie it means your credential goes to every site you visit, any of which can log it and replay it. So a credential-bearing header or cookie stays inactive until its profile has a meaningful URL or host filter — a bare `*`, `<all_urls>` or `^.*$` restricts nothing and doesn't count. If you genuinely need one everywhere, you can override it for that one profile without weakening the others. You're also warned when a credential profile targets a plain `http://` host, with `localhost`, `127.0.0.1`, `[::1]` and `*.local` exempt.
 
 **Three storage modes**, chosen in the Security panel:
 
@@ -221,7 +225,7 @@ Chromium's `append` allowlist is: `accept`, `accept-encoding`, `accept-language`
 - **Header names are case-insensitive to servers.** Chromium lowercasing them changes nothing functionally — it matches how HTTP/2 and HTTP/3 work on the wire.
 - **A few headers can't be modified.** Both browsers reserve some for their own use. On Chromium, the reason appears in the status bar at the bottom of the popup.
 - **Profiles are stored locally, not synced.** They stay on the machine you created them on. Use export and import to move them.
-- **This is a developer tool.** Credential headers are held back until their profile has a real URL filter, but that guard is only as good as the filter you write. Scope a credential profile to the host that issued the token, not to a pattern that happens to include it.
+- **This is a developer tool.** Credential headers and cookies are held back until their profile has a real URL filter, but that guard is only as good as the filter you write. Scope a credential profile to the host that issued the token, not to a pattern that happens to include it.
 - **A locked vault only affects profiles that hold credentials.** Everything else keeps applying and stays editable, so locking isn't a way to turn the extension off — the toggle and `Alt+Shift+H` are.
 - **Removing CSP weakens the page you're testing.** It's the right tool for debugging a policy that blocks your tooling, but scope it to the site you're working on rather than leaving it on everywhere.
 - **Redirects apply before headers.** A request that gets redirected is matched again at its new URL, so a profile filtered on the old host won't touch the redirected request.
@@ -246,8 +250,8 @@ Check the toggle in the popup's title bar isn't off, that the profile's checkbox
 **A profile shows a padlock and its rules aren't applying.**
 It holds credentials and the vault is locked. Click **Unlock** in the bar at the top of the popup. In session-only mode there's no vault to unlock — the credential was cleared when the browser session ended, so re-enter it on the header row.
 
-**A credential header is being ignored even though the profile is enabled.**
-Credential-bearing headers need a meaningful URL or host filter before they activate, and `*` or `<all_urls>` doesn't count. Add a real filter on the Filters tab, or override the requirement for that profile in the Security panel.
+**A credential header or cookie is being ignored even though the profile is enabled.**
+Credential-bearing headers and cookies need a meaningful URL or host filter before they activate, and `*` or `<all_urls>` doesn't count. Add a real filter on the Filters tab, or override the requirement for that profile in the Security panel.
 
 **Nothing works on Firefox specifically.**
 Almost always missing site access. Open the popup and look for the red bar, or check the extensions button in the toolbar.
@@ -285,7 +289,7 @@ Every file is byte-identical between the two builds except `manifest.json` and `
 | `common.js` | State model, JSON normalisation, shared constants |
 | `common-api.js` | Browser API shim — `browser.*` on Firefox, `chrome.*` on Chromium |
 | `background.js` | The engine — `declarativeNetRequest` on Chromium, `webRequest` on Firefox |
-| `security.js` | Credential policy: sensitive-header recognition and host rules. Pure functions, no storage or crypto |
+| `security.js` | Credential policy: sensitive header and cookie recognition, host rules, activation gate. Pure functions, no storage or crypto |
 | `vault.js` | AES-GCM encryption and PBKDF2 key derivation over Web Crypto |
 | `secretstore.js` | Credential storage across the three modes, plus vault lock state |
 | `popup.html` / `popup.css` / `popup.js` | The interface |
