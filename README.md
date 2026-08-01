@@ -4,7 +4,7 @@
 
 Add, rewrite, and remove HTTP request and response headers from your browser toolbar. Group rules into profiles, scope them to the URLs you care about, and flip the whole thing off with one keystroke.
 
-Built on Manifest V3 for both Chrome and Firefox. No account, no telemetry, no network calls — everything stays on your machine.
+Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no network calls — everything stays on your machine.
 
 ---
 
@@ -76,19 +76,19 @@ Built on Manifest V3 for both Chrome and Firefox. No account, no telemetry, no n
 | Chrome, Edge, Brave, Vivaldi, Opera | **111** | CSS `color-mix()` in the interface |
 | Firefox | **113** | Same; the packaged build declares 115 (the ESR baseline) |
 
-### Chrome
+### Chromium (Chrome, Edge, Brave, Vivaldi, Opera)
 
 The extension isn't on the Chrome Web Store, so it loads unpacked:
 
-1. Download and unzip the release. Put the folder somewhere permanent — Chrome reads it from disk at every startup, so don't leave it in Downloads.
-2. Open `chrome://extensions`.
+1. Download and unzip the release. Put the folder somewhere permanent — the browser reads it from disk at every startup, so don't leave it in Downloads.
+2. Open `chrome://extensions` (`edge://extensions` on Edge, `brave://extensions` on Brave, and so on).
 3. Turn on **Developer mode** using the toggle in the top right.
-4. Click **Load unpacked** and select the `chrome` folder (the one containing `manifest.json`).
+4. Click **Load unpacked** and select the `chromium` folder (the one containing `manifest.json`).
 5. Click the puzzle-piece icon in the toolbar and pin OpenModHeader.
 
-Chrome will ask for permission to read and change your data on all websites. Rewriting headers on arbitrary URLs is exactly what that covers. Access is granted at install and stays granted.
+The browser will ask for permission to read and change your data on all websites. Rewriting headers on arbitrary URLs is exactly what that covers. Access is granted at install and stays granted.
 
-> **Note:** Chrome shows a "Disable developer mode extensions" warning on every startup for unpacked extensions. That's expected and can be dismissed.
+> **Note:** Chromium browsers show a "Disable developer mode extensions" warning on every startup for unpacked extensions. That's expected and can be dismissed.
 
 ### Firefox
 
@@ -149,15 +149,15 @@ Every enabled profile is live at the same time. When two profiles touch the same
 - `Alt+Shift+H` turns everything off and on without losing your setup
 - The badge shows how many headers are live, or `off` when paused
 - The **⋯** menu exports and imports profiles as JSON — importing adds to what you have rather than replacing it
-- Profile JSON is portable between the Chrome and Firefox builds
+- Profile JSON is portable between the Chromium and Firefox builds
 
 ---
 
-## Chrome and Firefox behave slightly differently
+## Chromium and Firefox behave slightly differently
 
-Chrome removed blocking `webRequest` in Manifest V3, so the Chrome build uses `declarativeNetRequest`. Firefox kept blocking `webRequest`, which is better suited to this job, so the Firefox build uses that. The interface is identical; the engine underneath is not.
+Chromium removed blocking `webRequest` in Manifest V3, so the Chromium build uses `declarativeNetRequest`. Firefox kept blocking `webRequest`, which is better suited to this job, so the Firefox build uses that. The interface is identical; the engine underneath is not.
 
-| | Chrome | Firefox |
+| | Chromium | Firefox |
 |---|---|---|
 | Header name capitalisation | Lowercased by the browser | Kept exactly as you type it |
 | `append` on request headers | Only ~20 allowlisted headers | Any header |
@@ -166,19 +166,19 @@ Chrome removed blocking `webRequest` in Manifest V3, so the Chrome build uses `d
 | Rule ceiling | 5000 rules, 1000 with regex | No ceiling |
 | Site access | Granted at install, permanent | Revocable at any time |
 
-Both differences come from the same root cause: Chrome's `declarativeNetRequest` cannot read a request before deciding what to do with it, while Firefox's `webRequest` can. If a duplicate cookie matters to you on Chrome, use **Replace all cookies** instead of merge.
+Both differences come from the same root cause: Chromium's `declarativeNetRequest` cannot read a request before deciding what to do with it, while Firefox's `webRequest` can. If a duplicate cookie matters to you on Chromium, use **Replace all cookies** instead of merge.
 
-Tab and window filters work on both, but on Chrome they compile to session rules — `tabIds` is only supported there — which means a tab-scoped profile is rebuilt from scratch when the browser restarts. Tab ids don't survive a restart either, so re-capture them with **Use current**.
+Tab and window filters work on both, but on Chromium they compile to session rules — `tabIds` is only supported there — which means a tab-scoped profile is rebuilt from scratch when the browser restarts. Tab ids don't survive a restart either, so re-capture them with **Use current**.
 
-Chrome's `append` allowlist is: `accept`, `accept-encoding`, `accept-language`, `access-control-request-headers`, `cache-control`, `connection`, `content-language`, `cookie`, `forwarded`, `if-match`, `if-none-match`, `keep-alive`, `range`, `te`, `trailer`, `transfer-encoding`, `upgrade`, `user-agent`, `via`, `want-digest`, `x-forwarded-for`. Rows that break this rule get a red outline in the popup — use `set` instead. Response headers can be appended freely on both browsers.
+Chromium's `append` allowlist is: `accept`, `accept-encoding`, `accept-language`, `access-control-request-headers`, `cache-control`, `connection`, `content-language`, `cookie`, `forwarded`, `if-match`, `if-none-match`, `keep-alive`, `range`, `te`, `trailer`, `transfer-encoding`, `upgrade`, `user-agent`, `via`, `want-digest`, `x-forwarded-for`. Rows that break this rule get a red outline in the popup — use `set` instead. Response headers can be appended freely on both browsers.
 
 ---
 
 ## Good to know
 
 - **Already-loaded resources keep their old headers.** New requests pick up changes straight away; reload the page for everything else.
-- **Header names are case-insensitive to servers.** Chrome lowercasing them changes nothing functionally — it matches how HTTP/2 and HTTP/3 work on the wire.
-- **A few headers can't be modified.** Both browsers reserve some for their own use. On Chrome, the reason appears in the status bar at the bottom of the popup.
+- **Header names are case-insensitive to servers.** Chromium lowercasing them changes nothing functionally — it matches how HTTP/2 and HTTP/3 work on the wire.
+- **A few headers can't be modified.** Both browsers reserve some for their own use. On Chromium, the reason appears in the status bar at the bottom of the popup.
 - **Profiles are stored locally, not synced.** They stay on the machine you created them on. Use export and import to move them.
 - **This is a developer tool.** Setting `Authorization` or `Cookie` headers globally will send your credentials to every site you visit. Scope those profiles with a URL filter.
 - **Removing CSP weakens the page you're testing.** It's the right tool for debugging a policy that blocks your tooling, but scope it to the site you're working on rather than leaving it on everywhere.
@@ -202,15 +202,15 @@ Check the toggle in the popup's title bar isn't off, that the profile's checkbox
 **Nothing works on Firefox specifically.**
 Almost always missing site access. Open the popup and look for the red bar, or check the extensions button in the toolbar.
 
-**A rule is being rejected on Chrome.**
-The status bar at the bottom of the popup names the header and the reason. The usual cause is `append` on a header outside Chrome's allowlist.
+**A rule is being rejected on Chromium.**
+The status bar at the bottom of the popup names the header and the reason. The usual cause is `append` on a header outside Chromium's allowlist.
 
 **I can't see my response header changes in devtools.**
 Firefox's network panel reports what arrived on the wire, not what the extension changed it to. Test against what your page actually receives rather than what devtools displays.
 
 ### Inspecting the compiled rules
 
-**Chrome** — click the **service worker** link on the extension's card in `chrome://extensions`, then run:
+**Chromium** — click the **service worker** link on the extension's card in `chrome://extensions`, then run:
 
 ```js
 chrome.declarativeNetRequest.getDynamicRules().then(console.log)
@@ -223,7 +223,7 @@ chrome.declarativeNetRequest.getDynamicRules().then(console.log)
 ## Project layout
 
 ```
-chrome/     load this folder in Chrome and other Chromium browsers
+chromium/   load this folder in Chrome, Edge, Brave, and other Chromium browsers
 firefox/    source for the Firefox build; package as .xpi
 ```
 
@@ -233,7 +233,7 @@ firefox/    source for the Firefox build; package as .xpi
 |---|---|
 | `manifest.json` | Permissions, background entry point, popup, keyboard shortcut |
 | `common.js` | State model, JSON normalisation, shared constants |
-| `background.js` | The engine — `declarativeNetRequest` on Chrome, `webRequest` on Firefox |
+| `background.js` | The engine — `declarativeNetRequest` on Chromium, `webRequest` on Firefox |
 | `popup.html` / `popup.css` / `popup.js` | The interface |
 | `icons/` | Toolbar icons |
 
