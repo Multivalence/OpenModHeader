@@ -1,26 +1,41 @@
 /* OpenModHeader — Chrome background service worker.
 
-   Compiles stored profiles into declarativeNetRequest rules. Profiles that
-   filter by tab or window go into session rules, because `tabIds` is only
-   supported there; everything else goes into dynamic rules, which survive
-   a browser restart. */
+   Rule routing is the heart of the credential-security design:
+
+     dynamic rules   non-sensitive rules, plus sensitive rules in
+                     persistent-plaintext mode (legacy behaviour)
+     session rules   everything tab/window-scoped, and every sensitive rule
+                     in session-only or encrypted-vault mode
+
+   Session rules carry credentials because they never touch disk. They are
+   split into two id bands so locking removes the sensitive ones without
+   disturbing anything else. */
 
 import {
-  api, loadState, saveState, countActiveHeaders,
-  planProfile, profileIsActive, parseFilters, hasTabScope, RESOURCE_TYPES
+  api, loadState, saveState, countActiveHeaders, collectSecretIds,
+  planProfile, parseFilters, hasTabScope, RESOURCE_TYPES,
+  needsMigration, migrateToV3
 } from './common.js';
+import { evaluateProfile, sensitiveHeadersOf, profileHasSensitiveContent } from './security.js';
+import {
+  resolveSecrets, isUnlocked, lock, handleLockAlarm, pruneOrphans,
+  LOCK_ALARM, hasSessionStorage
+} from './secretstore.js';
 
-/* Priority bands. An `allow` rule suppresses lower-priority rules, so
-   exclusions must outrank the modifications they cancel. */
 const PRIORITY_MODIFY = 1;
 const PRIORITY_REDIRECT = 2;
 const PRIORITY_ALLOW = 3;
 
+/* Reserved id bands. Session ids below SENSITIVE_BASE are ordinary
+   tab-scoped rules; ids at or above it carry credentials and are the only
+   ones removed on lock. Dynamic and session rules live in separate rule
+   sets, so those two id spaces cannot collide with each other. */
+const SESSION_PLAIN_BASE = 1;
+export const SENSITIVE_BASE = 100000;
+
 let running = false;
 let queued = false;
 
-/* tabId -> windowId, kept current so window filters can be expanded into
-   the tab ids that declarativeNetRequest actually understands. */
 const tabWindows = new Map();
 
 async function indexTabs() {
@@ -63,44 +78,81 @@ function conditionsFor(parsed, tabIds) {
   return conditions;
 }
 
-export function buildRules(state) {
+/* Builds three buckets plus a report of profiles whose sensitive rules were
+   withheld, so the popup can explain why. */
+export function buildRules(state, { secrets = {}, unlocked = true } = {}) {
   const dynamic = [];
-  const session = [];
-  let dynamicId = 1;
-  let sessionId = 1;
+  const sessionPlain = [];
+  const sessionSensitive = [];
+  const blocked = [];
 
-  if (state.paused) return { dynamic, session };
+  if (state.paused) return { dynamic, sessionPlain, sessionSensitive, blocked };
+
+  const settings = state.settings;
+  const resolvedIds = new Set(Object.keys(secrets));
+  const resolve = id => secrets[id];
+  const plaintextMode = settings.credentialStorage === 'plaintext';
+
+  let dynamicId = 1;
+  let plainId = SESSION_PLAIN_BASE;
+  let sensitiveId = SENSITIVE_BASE;
 
   for (const profile of state.profiles) {
-    if (!profile.enabled || !profileIsActive(profile)) continue;
+    if (!profile.enabled) continue;
+
+    const verdict = evaluateProfile(profile, settings, { unlocked, resolvedIds });
+    const plan = planProfile(profile, resolve);
+
+    if (verdict.hasSensitive && verdict.blocked) {
+      blocked.push({
+        profileId: profile.id,
+        profileName: profile.name,
+        reasons: verdict.reasons
+      });
+    }
+
+    const hasAnything = plan.requestOps.length || plan.responseOps.length
+      || plan.requestCookies.length || plan.redirects.length;
+    if (!hasAnything) continue;
 
     const parsed = parseFilters(profile);
     const tabIds = [...new Set([...parsed.tabIds, ...tabsInWindows(parsed.windowIds)])];
-
-    /* A profile scoped to a window with no open tabs must match nothing,
-       rather than falling through and matching everything. */
+    /* A profile scoped to a window with no open tabs matches nothing rather
+       than falling through and matching everything. */
     if (hasTabScope(profile) && !tabIds.length) continue;
 
-    const scoped = tabIds.length > 0;
-    const bucket = scoped ? session : dynamic;
-    const nextId = () => (scoped ? sessionId++ : dynamicId++);
-
-    const plan = planProfile(profile);
     const conditions = conditionsFor(parsed, tabIds);
+    const sensitiveNames = new Set(
+      sensitiveHeadersOf(profile).map(h => h.name.trim().toLowerCase())
+    );
+    const cookiesAreSensitive = profileHasSensitiveContent(profile)
+      && plan.requestCookies.length > 0;
 
-    const requestHeaders = plan.requestOps.map(toHeaderInfo);
-    if (plan.requestCookies.length) {
-      requestHeaders.push({
-        header: 'cookie',
-        /* Chrome cannot read the outgoing header, so a merge is an append.
-           Duplicate names end up sent twice; replace avoids that. */
-        operation: plan.cookieMode === 'replace' ? 'set' : 'append',
-        value: plan.requestCookies.map(c => `${c.name}=${c.value}`).join('; ')
-      });
-    }
-    const responseHeaders = plan.responseOps.map(toHeaderInfo);
+    const splitOps = ops => {
+      const plainOps = [];
+      const secretOps = [];
+      for (const op of ops) {
+        (sensitiveNames.has(op.name.trim().toLowerCase()) ? secretOps : plainOps).push(op);
+      }
+      return { plainOps, secretOps };
+    };
 
-    if (requestHeaders.length || responseHeaders.length) {
+    const req = splitOps(plan.requestOps);
+    const res = splitOps(plan.responseOps);
+
+    const cookieHeader = plan.requestCookies.length ? {
+      header: 'cookie',
+      /* Chrome cannot read the outgoing header, so a merge is an append. */
+      operation: plan.cookieMode === 'replace' ? 'set' : 'append',
+      value: plan.requestCookies.map(c => `${c.name}=${c.value}`).join('; ')
+    } : null;
+
+    const scoped = tabIds.length > 0;
+    const plainBucket = scoped ? sessionPlain : dynamic;
+    const plainNextId = scoped ? () => plainId++ : () => dynamicId++;
+
+    const emit = (bucket, nextId, requestHeaders, responseHeaders) => {
+      if (!requestHeaders.length && !responseHeaders.length) return;
       const action = { type: 'modifyHeaders' };
       if (requestHeaders.length) action.requestHeaders = requestHeaders;
       if (responseHeaders.length) action.responseHeaders = responseHeaders;
@@ -109,6 +161,26 @@ export function buildRules(state) {
           id: nextId(), priority: PRIORITY_MODIFY, action, condition,
           __profile: profile.name
         });
+      }
+    };
+
+    /* Non-sensitive half. */
+    const plainRequest = req.plainOps.map(toHeaderInfo);
+    if (cookieHeader && !cookiesAreSensitive) plainRequest.push(cookieHeader);
+    emit(plainBucket, plainNextId, plainRequest, res.plainOps.map(toHeaderInfo));
+
+    /* Sensitive half, withheld entirely when the profile is blocked. */
+    if (!verdict.blocked) {
+      const secretRequest = req.secretOps.map(toHeaderInfo);
+      if (cookieHeader && cookiesAreSensitive) secretRequest.push(cookieHeader);
+      const secretResponse = res.secretOps.map(toHeaderInfo);
+
+      /* Plaintext mode keeps the pre-existing dynamic-rule behaviour;
+         otherwise credentials only ever become session rules. */
+      if (plaintextMode) {
+        emit(dynamic, () => dynamicId++, secretRequest, secretResponse);
+      } else {
+        emit(sessionSensitive, () => sensitiveId++, secretRequest, secretResponse);
       }
     }
 
@@ -119,42 +191,38 @@ export function buildRules(state) {
 
       if (redirect.type === 'regex') {
         condition.regexFilter = redirect.from;
-        bucket.push({
-          id: nextId(), priority: PRIORITY_REDIRECT,
+        plainBucket.push({
+          id: plainNextId(), priority: PRIORITY_REDIRECT,
           action: { type: 'redirect', redirect: { regexSubstitution: redirect.to } },
           condition, __profile: profile.name
         });
       } else {
         condition.urlFilter = redirect.from;
-        bucket.push({
-          id: nextId(), priority: PRIORITY_REDIRECT,
+        plainBucket.push({
+          id: plainNextId(), priority: PRIORITY_REDIRECT,
           action: { type: 'redirect', redirect: { url: redirect.to } },
           condition, __profile: profile.name
         });
       }
     }
 
-    /* URL exclusions. declarativeNetRequest has no negative URL condition,
-       so these become high-priority `allow` rules. Note this suppresses
-       every profile's rules for a matching request, not just this one —
-       the Firefox build scopes exclusions per profile correctly. */
     for (const value of parsed.excludeContains) {
-      bucket.push({
-        id: nextId(), priority: PRIORITY_ALLOW, action: { type: 'allow' },
+      plainBucket.push({
+        id: plainNextId(), priority: PRIORITY_ALLOW, action: { type: 'allow' },
         condition: { urlFilter: value, resourceTypes: RESOURCE_TYPES },
         __profile: profile.name
       });
     }
     for (const value of parsed.excludeRegexes) {
-      bucket.push({
-        id: nextId(), priority: PRIORITY_ALLOW, action: { type: 'allow' },
+      plainBucket.push({
+        id: plainNextId(), priority: PRIORITY_ALLOW, action: { type: 'allow' },
         condition: { regexFilter: value, resourceTypes: RESOURCE_TYPES },
         __profile: profile.name
       });
     }
   }
 
-  return { dynamic, session };
+  return { dynamic, sessionPlain, sessionSensitive, blocked };
 }
 
 export function stripMeta(rule) {
@@ -174,8 +242,8 @@ async function applyBucket(rules, getExisting, update) {
   try {
     await update({ removeRuleIds, addRules: rules.map(stripMeta) });
   } catch {
-    /* One bad rule fails the whole batch, so add them individually and
-       name the ones the engine turns down. */
+    /* One bad rule fails the whole batch, so add them individually and name
+       the ones the engine turns down. */
     await update({ removeRuleIds });
     for (const rule of rules) {
       try {
@@ -193,7 +261,12 @@ async function applyRules() {
   running = true;
   try {
     const state = await loadState();
-    const { dynamic, session } = buildRules(state);
+    const settings = state.settings;
+    const unlocked = settings.credentialStorage === 'vault' ? await isUnlocked() : true;
+    const secrets = await resolveSecrets(settings);
+
+    const { dynamic, sessionPlain, sessionSensitive, blocked } =
+      buildRules(state, { secrets, unlocked });
 
     const errors = [
       ...await applyBucket(
@@ -202,18 +275,32 @@ async function applyRules() {
         opts => api.declarativeNetRequest.updateDynamicRules(opts)
       ),
       ...await applyBucket(
-        session,
+        [...sessionPlain, ...sessionSensitive],
         () => api.declarativeNetRequest.getSessionRules(),
         opts => api.declarativeNetRequest.updateSessionRules(opts)
       )
     ];
 
-    await api.storage.local.set({ ruleErrors: errors });
-    await updateBadge(state);
+    await api.storage.local.set({
+      ruleErrors: errors,
+      blockedProfiles: blocked,
+      vaultUnlocked: unlocked
+    });
+    await updateBadge(state, { unlocked, secrets, blocked });
   } finally {
     running = false;
     if (queued) { queued = false; applyRules(); }
   }
+}
+
+/* Removes only the sensitive band, leaving tab-scoped session rules and all
+   dynamic rules untouched. */
+async function removeSensitiveSessionRules() {
+  const existing = await api.declarativeNetRequest.getSessionRules();
+  const removeRuleIds = existing.map(r => r.id).filter(id => id >= SENSITIVE_BASE);
+  if (!removeRuleIds.length) return 0;
+  await api.declarativeNetRequest.updateSessionRules({ removeRuleIds });
+  return removeRuleIds.length;
 }
 
 function describe(rule, err) {
@@ -223,23 +310,30 @@ function describe(rule, err) {
   ];
   const what = names.length ? names.join(', ') : rule.action.type;
   const reason = String(err?.message || err).replace(/^Error:\s*/, '');
+  /* Header names only, never a value. */
   return `${rule.__profile}: ${what} — ${reason}`;
 }
 
-async function updateBadge(state) {
-  const count = countActiveHeaders(state);
+async function updateBadge(state, { unlocked, secrets, blocked }) {
+  const count = countActiveHeaders(state, id => secrets[id]);
   const profile = state.profiles.find(p => p.id === state.activeProfileId) || state.profiles[0];
+  const locked = state.settings.credentialStorage === 'vault' && !unlocked;
 
   if (state.paused) {
     await api.action.setBadgeText({ text: 'off' });
     await api.action.setBadgeBackgroundColor({ color: '#6B7688' });
     await api.action.setTitle({ title: 'OpenModHeader — off' });
+  } else if (locked) {
+    await api.action.setBadgeText({ text: 'lock' });
+    await api.action.setBadgeBackgroundColor({ color: '#6D28D9' });
+    await api.action.setTitle({ title: 'OpenModHeader — vault locked' });
   } else {
     await api.action.setBadgeText({ text: count ? String(count) : '' });
     await api.action.setBadgeBackgroundColor({ color: profile?.color || '#B4470E' });
+    const suffix = blocked.length ? `, ${blocked.length} needing attention` : '';
     await api.action.setTitle({
       title: count
-        ? `OpenModHeader — ${count} rule${count === 1 ? '' : 's'} active`
+        ? `OpenModHeader — ${count} rule${count === 1 ? '' : 's'} active${suffix}`
         : 'OpenModHeader — nothing active'
     });
   }
@@ -251,24 +345,108 @@ async function updateBadge(state) {
   }
 }
 
-async function reindexAndApply() {
-  await indexTabs();
-  await applyRules();
+/* ---------------------------------------------------------------- *
+ * Migration
+ * ---------------------------------------------------------------- */
+
+/* Flags legacy data for the popup rather than migrating silently, because
+   the user must choose a storage mode first. Old dynamic rules are dropped
+   immediately so a stale plaintext rule cannot stay active alongside a new
+   session rule. Idempotent: migrateToV3 skips already-migrated headers. */
+async function checkMigration() {
+  const stored = await api.storage.local.get(['state', 'pendingMigration']);
+  const raw = stored.state;
+  if (!raw || !needsMigration(raw)) return;
+
+  const { state, extracted, migrated } = migrateToV3(raw);
+  await api.storage.local.set({
+    pendingMigration: {
+      detectedAt: stored.pendingMigration?.detectedAt ?? Date.now(),
+      credentialCount: migrated,
+      secretIds: Object.keys(extracted)   // ids only, never values
+    },
+    migrationSecrets: extracted,
+    state
+  });
+
+  const existing = await api.declarativeNetRequest.getDynamicRules();
+  if (existing.length) {
+    await api.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: existing.map(r => r.id)
+    });
+  }
 }
 
 /* ---------------------------------------------------------------- *
- * Events
+ * Messaging and events
  * ---------------------------------------------------------------- */
+
+api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  (async () => {
+    switch (message?.type) {
+      case 'apply':
+        await applyRules();
+        return sendResponse({ ok: true });
+      case 'lock':
+        await lock();
+        await removeSensitiveSessionRules();
+        await applyRules();
+        return sendResponse({ ok: true });
+      case 'unlocked':
+        await applyRules();
+        return sendResponse({ ok: true });
+      case 'prune': {
+        const state = await loadState();
+        const removed = await pruneOrphans(collectSecretIds(state), state.settings);
+        return sendResponse({ ok: true, removed });
+      }
+      case 'status': {
+        const state = await loadState();
+        return sendResponse({
+          ok: true,
+          unlocked: await isUnlocked(),
+          sessionStorage: hasSessionStorage(),
+          mode: state.settings.credentialStorage
+        });
+      }
+      default:
+        return sendResponse({ ok: false, error: 'unknown-message' });
+    }
+  })();
+  return true; // async response
+});
+
+api.alarms.onAlarm.addListener(async alarm => {
+  if (alarm.name !== LOCK_ALARM) return;
+  const state = await loadState();
+  const result = await handleLockAlarm(state.settings);
+  if (result.locked) {
+    await removeSensitiveSessionRules();
+    await applyRules();
+  }
+});
 
 api.storage.onChanged.addListener((changes, area) => {
   // Only react to the state key — writing ruleErrors must not loop back.
   if (area === 'local' && changes.state) applyRules();
 });
 
-api.runtime.onInstalled.addListener(reindexAndApply);
-api.runtime.onStartup.addListener(reindexAndApply);
+async function boot() {
+  await indexTabs();
+  await checkMigration();
+  await applyRules();
+}
 
-/* Window filters depend on which tabs live where, so track membership. */
+api.runtime.onInstalled.addListener(boot);
+
+/* A browser restart clears storage.session, so the vault is locked and the
+   sensitive band is empty by construction. Clearing it explicitly guards
+   against a stale rule surviving an extension reload. */
+api.runtime.onStartup.addListener(async () => {
+  await removeSensitiveSessionRules();
+  await boot();
+});
+
 api.tabs.onCreated.addListener(tab => {
   tabWindows.set(tab.id, tab.windowId);
   applyRules();
@@ -291,4 +469,4 @@ api.commands.onCommand.addListener(async command => {
   await saveState(state); // storage.onChanged triggers applyRules
 });
 
-reindexAndApply();
+boot();

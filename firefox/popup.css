@@ -69,7 +69,7 @@ body {
 }
 
 body:not(.expanded) {
-  width: 620px;
+  width: 700px;
   min-height: 320px;
   max-height: 580px;
 }
@@ -294,7 +294,7 @@ body.off { --accent: var(--faint); }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 9px 8px;
+  padding: 9px 9px;
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -815,3 +815,435 @@ body.off { --accent: var(--faint); }
 }
 
 .toggle-row input { accent-color: var(--accent); cursor: pointer; }
+
+/* ---------- credential security ---------- */
+
+body[data-section="security"] { --accent: var(--csp); }
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.notice[hidden] { display: none; }
+.notice-lock { background: color-mix(in srgb, var(--csp) 12%, var(--paper)); }
+.notice-migrate { background: color-mix(in srgb, var(--cookie) 16%, var(--paper)); }
+
+.notice-text {
+  margin: 0;
+  flex: 1 1 auto;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.notice-btn {
+  flex: 0 0 auto;
+  padding: 5px 11px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.notice-btn:hover { background: var(--accent); color: var(--paper); }
+.notice-lock .notice-btn { border-color: var(--csp); color: var(--csp); }
+.notice-migrate .notice-btn { border-color: var(--cookie); color: var(--cookie); }
+
+/* settings panel */
+
+.settings-group { margin-bottom: 16px; }
+
+.settings-head {
+  margin: 0 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.settings-note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  cursor: pointer;
+}
+
+.opt input { margin-top: 2px; accent-color: var(--accent); cursor: pointer; }
+.opt-body { flex: 1 1 auto; min-width: 0; }
+.opt-label { display: block; font-size: 12.5px; color: var(--ink); }
+.opt-blurb { display: block; margin-top: 2px; font-size: 11px; line-height: 1.45; color: var(--muted); }
+.opt.danger .opt-label { color: var(--danger); font-weight: 600; }
+
+.inline-select {
+  margin-left: 6px;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  color: var(--ink);
+  font-family: var(--ui);
+  font-size: 11.5px;
+}
+
+.vault-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  font-size: 12px;
+}
+
+.vault-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+.vault-dot.on { background: var(--in); }
+.vault-dot.off { background: var(--danger); }
+.vault-actions { margin-left: auto; display: flex; gap: 6px; }
+
+/* modal */
+
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(8, 12, 22, 0.55);
+}
+
+.modal-scrim[hidden] { display: none; }
+
+.modal-card {
+  width: 100%;
+  max-width: 420px;
+  max-height: 90%;
+  overflow-y: auto;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--paper);
+  box-shadow: 0 18px 44px rgba(6, 10, 20, 0.4);
+}
+
+.modal-title { margin: 0 0 8px; font-size: 14px; font-weight: 700; color: var(--ink); }
+.modal-body { font-size: 12px; line-height: 1.55; color: var(--ink); }
+.modal-body p { margin: 0 0 9px; }
+.modal-body p.warn { color: var(--danger); }
+.modal-body p.muted { color: var(--muted); font-size: 11.5px; }
+
+.modal-body label.field { display: block; margin-bottom: 10px; }
+.modal-body input[type="password"],
+.modal-body input[type="text"] {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.modal-body input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  margin-bottom: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.choice:hover { border-color: var(--accent); }
+.choice input { margin-top: 2px; accent-color: var(--accent); }
+.choice.danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.choice.danger .opt-label { color: var(--danger); }
+
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+.modal-error { margin: 0 0 8px; font-size: 11.5px; color: var(--danger); }
+.modal-error[hidden] { display: none; }
+
+/* locked rows */
+
+.row.locked .wire { opacity: 0.6; }
+.secret-chip {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  color: var(--muted);
+  font-family: var(--ui);
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.secret-chip:hover { color: var(--ink); border-color: var(--muted); }
+.secret-chip.needs { color: var(--danger); border-color: var(--danger); }
+.secret-chip.shared { color: var(--csp); border-color: var(--csp); }
+
+/* ---------- primary / danger buttons ---------- */
+
+.primary-btn,
+.danger-btn {
+  flex: 0 0 auto;
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Solid fill so the confirming action is unmistakably the primary one. */
+.primary-btn { background: var(--accent); color: #fff; border-color: var(--accent); }
+.primary-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.danger-btn { background: var(--danger); color: #fff; border-color: var(--danger); }
+.danger-btn:hover:not(:disabled) { filter: brightness(1.08); }
+
+.primary-btn:disabled,
+.danger-btn:disabled {
+  background: var(--line);
+  border-color: var(--line);
+  color: var(--faint);
+  cursor: not-allowed;
+  filter: none;
+}
+
+.primary-btn:focus-visible,
+.danger-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* ---------- credential chips ---------- */
+
+.chip-pair { display: flex; align-items: center; gap: 3px; flex: 0 0 auto; }
+.secret-chip.reveal { padding: 3px 6px; font-size: 11px; }
+
+/* ---------- mark-as-credential toggle ---------- */
+
+.mark-btn {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mark-btn:hover { background: var(--chrome); color: var(--ink); }
+.mark-btn.on { color: var(--csp); border-color: color-mix(in srgb, var(--csp) 45%, transparent); }
+.mark-btn.locked-on { color: var(--csp); opacity: 0.75; cursor: default; }
+.mark-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- locked profile panel ---------- */
+
+.locked-panel { padding: 30px 16px; text-align: center; }
+
+
+.locked-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.locked-body {
+  margin: 0 auto 8px;
+  max-width: 380px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.locked-body.muted { color: var(--faint); font-size: 11.5px; }
+.locked-panel .primary-btn { margin-top: 6px; }
+
+.chip-lock { font-size: 9px; flex: 0 0 auto; }
+
+/* ---------- inline SVG icons ---------- */
+
+.icon {
+  display: block;
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+
+/* Icon-only buttons centre their glyph rather than relying on line-height. */
+.icon-btn,
+.del-btn,
+.note-btn,
+.mark-btn,
+.chip-add,
+.secret-chip.reveal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.section-tab .arrow {
+  display: inline-flex;
+  align-items: center;
+  color: currentColor;
+  opacity: 0.85;
+}
+
+.chip-lock,
+.chip-caret {
+  display: inline-flex;
+  align-items: center;
+}
+
+.chip-lock { color: var(--csp); }
+
+.locked-icon {
+  display: flex;
+  justify-content: center;
+  color: var(--csp);
+  margin-bottom: 10px;
+}
+
+.redirect-arrow {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+}
+
+/* The shield reads as "protected", so it echoes the credential accent. */
+.mark-btn.on .icon,
+.mark-btn.locked-on .icon { color: var(--csp); }
+
+/* ---------- revealed credential ---------- */
+
+.wire input.h-value.revealed {
+  color: var(--ink);
+  -webkit-text-security: none;
+  cursor: text;
+}
+
+.row.locked .wire:has(.h-value.revealed) { opacity: 1; }
+
+.secret-chip.reveal.on {
+  color: var(--csp);
+  border-color: color-mix(in srgb, var(--csp) 50%, var(--line));
+  background: color-mix(in srgb, var(--csp) 10%, transparent);
+}
+
+/* ---------- settings view ---------- */
+
+.settings-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.settings-bar[hidden] { display: none; }
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.back-btn:hover { color: var(--ink); border-color: var(--muted); }
+.back-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.settings-bar-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.settings-bar-tally {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.icon-btn.active {
+  background: var(--paper);
+  color: var(--accent);
+  border-color: var(--line);
+}
+
+/* A dot rather than a number: this is a nudge, not a count to read. */
+.icon-btn.flagged { position: relative; }
+.icon-btn.flagged::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 1.5px var(--chrome);
+}
+
+.sections[hidden],
+.profiles[hidden] { display: none; }
+
+/* ---------- tab strip: never scroll, degrade instead ---------- */
+
+.section-tab {
+  min-width: 0;
+  /* Deliberately no shrinking. The strip is sized to fit every label at its
+     natural width, so a label can never be clipped at normal popup width. */
+  flex: 0 0 auto;
+}
+
+.section-tab .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Below this width the labels are dropped and the icons carry the meaning,
+   which keeps every tab reachable without horizontal scrolling. */
+/* Only reached when the viewport itself is narrow — the expanded tab view on
+   a small screen. Icons carry the meaning and every tab stays reachable. */
+@media (max-width: 620px) {
+  .section-tab { padding: 9px 10px; }
+  .section-tab .label { display: none; }
+  .section-tab .tally { margin-left: 2px; }
+}

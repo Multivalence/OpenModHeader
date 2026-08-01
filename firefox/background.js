@@ -1,15 +1,22 @@
 /* OpenModHeader — Firefox background event page.
 
    Firefox keeps blocking webRequest in Manifest V3, so this build edits
-   traffic directly in JavaScript. That lets it do three things the Chrome
-   build cannot: merge cookies against the real outgoing header, scope URL
-   exclusions to a single profile, and keep header capitalisation. */
+   traffic directly in JavaScript. For credential security that means the
+   sensitive operations are resolved from the secret store at compile time
+   and re-checked per request: when the vault is locked or a credential is
+   missing, only the protected header operation is skipped. Every other
+   operation in the same profile still applies. */
 
 import {
-  api, loadState, saveState, countActiveHeaders,
-  planProfile, profileIsActive, parseFilters,
+  api, loadState, saveState, countActiveHeaders, collectSecretIds,
+  planProfile, parseFilters, needsMigration, migrateToV3,
   RESOURCE_TYPES, GECKO_RESOURCE_TYPES
 } from './common.js';
+import { evaluateProfile, sensitiveHeadersOf, profileHasSensitiveContent } from './security.js';
+import {
+  resolveSecrets, isUnlocked, lock, handleLockAlarm, pruneOrphans,
+  LOCK_ALARM, hasSessionStorage
+} from './secretstore.js';
 
 const KNOWN_TYPES = [...RESOURCE_TYPES, ...GECKO_RESOURCE_TYPES];
 
@@ -17,8 +24,6 @@ let compiled = [];
 let settled = false;
 let ready = refresh();
 
-/* tabId -> windowId, so window filters can be resolved synchronously
-   inside a blocking listener. */
 const tabWindows = new Map();
 
 async function indexTabs() {
@@ -47,12 +52,37 @@ function safeRegexes(patterns) {
   return out;
 }
 
-function compileProfile(profile) {
-  if (!profileIsActive(profile)) return null;
+function compileProfile(profile, { secrets, settings, unlocked }) {
+  const verdict = evaluateProfile(profile, settings, {
+    unlocked,
+    resolvedIds: new Set(Object.keys(secrets))
+  });
 
-  const plan = planProfile(profile);
+  /* planProfile drops any sensitive op whose credential will not resolve, so
+     a locked or missing credential can never be sent as an empty value. */
+  const plan = planProfile(profile, id => (verdict.blocked ? undefined : secrets[id]));
+
+  const sensitiveNames = new Set(
+    sensitiveHeadersOf(profile).map(h => h.name.trim().toLowerCase())
+  );
+  const cookiesAreSensitive = profileHasSensitiveContent(profile)
+    && plan.requestCookies.length > 0;
+
+  /* When the profile is blocked, strip the credential-bearing operations but
+     keep everything else — this is the "skip only the protected op" rule. */
+  const keep = ops => verdict.blocked
+    ? ops.filter(op => !sensitiveNames.has(op.name.trim().toLowerCase()))
+    : ops;
+
+  const requestOps = keep(plan.requestOps);
+  const responseOps = keep(plan.responseOps);
+  const requestCookies = (verdict.blocked && cookiesAreSensitive) ? [] : plan.requestCookies;
+
+  if (!requestOps.length && !responseOps.length && !requestCookies.length && !plan.redirects.length) {
+    return null;
+  }
+
   const parsed = parseFilters(profile, KNOWN_TYPES);
-
   const regexes = safeRegexes(parsed.regexes);
   const excludeRegexes = safeRegexes(parsed.excludeRegexes);
   const unscoped = !parsed.contains.length && !regexes.length;
@@ -96,9 +126,9 @@ function compileProfile(profile) {
   }
 
   return {
-    requestOps: plan.requestOps,
-    responseOps: plan.responseOps,
-    requestCookies: plan.requestCookies,
+    requestOps,
+    responseOps,
+    requestCookies,
     cookieMode: plan.cookieMode,
     redirects,
     matches
@@ -107,11 +137,30 @@ function compileProfile(profile) {
 
 async function refresh() {
   const state = await loadState();
+  const settings = state.settings;
+  const unlocked = settings.credentialStorage === 'vault' ? await isUnlocked() : true;
+  const secrets = await resolveSecrets(settings);
+
   compiled = state.paused
     ? []
-    : state.profiles.filter(p => p.enabled).map(compileProfile).filter(Boolean);
+    : state.profiles
+        .filter(p => p.enabled)
+        .map(p => compileProfile(p, { secrets, settings, unlocked }))
+        .filter(Boolean);
+
+  const blocked = state.paused ? [] : state.profiles
+    .filter(p => p.enabled)
+    .map(p => ({
+      profile: p,
+      verdict: evaluateProfile(p, settings, { unlocked, resolvedIds: new Set(Object.keys(secrets)) })
+    }))
+    .filter(x => x.verdict.hasSensitive && x.verdict.blocked)
+    .map(x => ({ profileId: x.profile.id, profileName: x.profile.name, reasons: x.verdict.reasons }));
+
+  await api.storage.local.set({ blockedProfiles: blocked, vaultUnlocked: unlocked });
+
   settled = true;
-  await updateBadge(state);
+  await updateBadge(state, { unlocked, secrets, blocked });
   return state;
 }
 
@@ -193,9 +242,9 @@ function handler(kind) {
   };
 
   return details => {
-    /* Firefox lets a blocking listener return a promise. When the event
-       page has just been revived this holds the request until the stored
-       profiles are loaded, instead of letting it slip through unmodified. */
+    /* Firefox lets a blocking listener return a promise. When the event page
+       has just been revived this holds the request until stored profiles and
+       credentials are loaded, instead of letting it through unmodified. */
     if (settled) return run(details);
     return ready.then(() => run(details));
   };
@@ -262,20 +311,26 @@ api.webRequest.onHeadersReceived.addListener(
  * Badge and events
  * ---------------------------------------------------------------- */
 
-async function updateBadge(state) {
-  const count = countActiveHeaders(state);
+async function updateBadge(state, { unlocked, secrets, blocked }) {
+  const count = countActiveHeaders(state, id => secrets[id]);
   const profile = state.profiles.find(p => p.id === state.activeProfileId) || state.profiles[0];
+  const locked = state.settings.credentialStorage === 'vault' && !unlocked;
 
   if (state.paused) {
     await api.action.setBadgeText({ text: 'off' });
     await api.action.setBadgeBackgroundColor({ color: '#6B7688' });
     await api.action.setTitle({ title: 'OpenModHeader — off' });
+  } else if (locked) {
+    await api.action.setBadgeText({ text: 'lock' });
+    await api.action.setBadgeBackgroundColor({ color: '#6D28D9' });
+    await api.action.setTitle({ title: 'OpenModHeader — vault locked' });
   } else {
     await api.action.setBadgeText({ text: count ? String(count) : '' });
     await api.action.setBadgeBackgroundColor({ color: profile?.color || '#B4470E' });
+    const suffix = blocked.length ? `, ${blocked.length} needing attention` : '';
     await api.action.setTitle({
       title: count
-        ? `OpenModHeader — ${count} rule${count === 1 ? '' : 's'} active`
+        ? `OpenModHeader — ${count} rule${count === 1 ? '' : 's'} active${suffix}`
         : 'OpenModHeader — nothing active'
     });
   }
@@ -291,12 +346,76 @@ function reload() {
   ready = refresh();
 }
 
+async function checkMigration() {
+  const stored = await api.storage.local.get(['state', 'pendingMigration']);
+  const raw = stored.state;
+  if (!raw || !needsMigration(raw)) return;
+
+  const { state, extracted, migrated } = migrateToV3(raw);
+  await api.storage.local.set({
+    pendingMigration: {
+      detectedAt: stored.pendingMigration?.detectedAt ?? Date.now(),
+      credentialCount: migrated,
+      secretIds: Object.keys(extracted)   // ids only, never values
+    },
+    migrationSecrets: extracted,
+    state
+  });
+}
+
+api.runtime.onMessage.addListener(async message => {
+  switch (message?.type) {
+    case 'apply':
+      reload();
+      await ready;
+      return { ok: true };
+    case 'lock':
+      await lock();
+      reload();
+      await ready;
+      return { ok: true };
+    case 'unlocked':
+      reload();
+      await ready;
+      return { ok: true };
+    case 'prune': {
+      const state = await loadState();
+      const removed = await pruneOrphans(collectSecretIds(state), state.settings);
+      return { ok: true, removed };
+    }
+    case 'status': {
+      const state = await loadState();
+      return {
+        ok: true,
+        unlocked: await isUnlocked(),
+        sessionStorage: hasSessionStorage(),
+        mode: state.settings.credentialStorage
+      };
+    }
+    default:
+      return { ok: false, error: 'unknown-message' };
+  }
+});
+
+api.alarms.onAlarm.addListener(async alarm => {
+  if (alarm.name !== LOCK_ALARM) return;
+  const state = await loadState();
+  const result = await handleLockAlarm(state.settings);
+  if (result.locked) reload();
+});
+
 api.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.state) reload();
 });
 
-api.runtime.onInstalled.addListener(() => indexTabs().then(reload));
-api.runtime.onStartup.addListener(() => indexTabs().then(reload));
+async function boot() {
+  await indexTabs();
+  await checkMigration();
+  reload();
+}
+
+api.runtime.onInstalled.addListener(boot);
+api.runtime.onStartup.addListener(boot);
 
 /* Site access can be granted or taken away long after install. */
 api.permissions.onAdded.addListener(reload);
@@ -313,4 +432,4 @@ api.commands.onCommand.addListener(async command => {
   await saveState(state); // storage.onChanged triggers reload
 });
 
-indexTabs();
+boot();

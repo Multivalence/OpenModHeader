@@ -1,9 +1,12 @@
 /* OpenModHeader — shared state model and rule compiler.
    Byte-identical in the chrome/ and firefox/ builds. */
 
-/* Firefox exposes promise-based `browser.*`; Chrome exposes `chrome.*`,
-   which also returns promises for every API this extension touches. */
-export const api = globalThis.browser ?? globalThis.chrome;
+import { api } from './common-api.js';
+import { isSensitiveHeader, normalizeSettings, DEFAULT_SETTINGS } from './security.js';
+
+export { api };
+
+export const SCHEMA_VERSION = 3;
 
 export const RESOURCE_TYPES = [
   'main_frame', 'sub_frame', 'stylesheet', 'script', 'image', 'font',
@@ -95,7 +98,16 @@ export function uid() {
 }
 
 export function blankHeader(name = '', value = '') {
-  return { id: uid(), enabled: true, operation: 'set', name, value, comment: '' };
+  return {
+    id: uid(), enabled: true, operation: 'set', name, value, comment: '',
+    /* Set when the header is credential-bearing. The value then lives in the
+       secret store under secretId and never inside the profile object. */
+    sensitive: false, secretId: null, requiresCredential: false
+  };
+}
+
+export function blankSecretId() {
+  return `secret-${uid()}`;
 }
 
 export function blankCookie() {
@@ -128,6 +140,10 @@ export function blankProfile(index = 1, colorIndex = 0) {
     name: `Profile ${index}`,
     color: PROFILE_COLORS[colorIndex % PROFILE_COLORS.length],
     enabled: true,
+    /* Per-profile escape hatch for the global-host requirement. Deliberately
+       per profile so accepting the risk once does not disable the protection
+       everywhere. */
+    allowGlobalSensitiveHeaders: false,
     requestHeaders: [blankHeader()],
     responseHeaders: [],
     cookies: [],
@@ -140,7 +156,15 @@ export function blankProfile(index = 1, colorIndex = 0) {
 
 export function defaultState() {
   const profile = blankProfile(1, 0);
-  return { version: 2, paused: false, activeProfileId: profile.id, profiles: [profile] };
+  return {
+    version: SCHEMA_VERSION,
+    paused: false,
+    activeProfileId: profile.id,
+    settings: { ...DEFAULT_SETTINGS },
+    profiles: [profile],
+    /* Non-secret metadata only: labels and reference counts, never values. */
+    secretsMeta: {}
+  };
 }
 
 /* ---------------------------------------------------------------- *
@@ -159,7 +183,58 @@ export function normalize(raw) {
     ? raw.activeProfileId
     : clean[0].id;
 
-  return { version: 2, paused: !!raw.paused, activeProfileId, profiles: clean };
+  return {
+    version: SCHEMA_VERSION,
+    paused: !!raw.paused,
+    activeProfileId,
+    settings: normalizeSettings(raw.settings),
+    profiles: clean,
+    secretsMeta: normalizeSecretsMeta(raw.secretsMeta, clean)
+  };
+}
+
+function normalizeSecretsMeta(raw, profiles) {
+  const referenced = new Set(collectSecretIds({ profiles }));
+  const out = {};
+  if (raw && typeof raw === 'object') {
+    for (const [id, meta] of Object.entries(raw)) {
+      if (!referenced.has(id)) continue;   // drop orphaned metadata
+      out[id] = {
+        label: str(meta?.label).slice(0, 80),
+        createdAt: Number(meta?.createdAt) || Date.now()
+      };
+    }
+  }
+  for (const id of referenced) {
+    if (!out[id]) out[id] = { label: '', createdAt: Date.now() };
+  }
+  return out;
+}
+
+/* Every secret id referenced by any profile. Used for orphan pruning and to
+   decide whether deleting a profile may delete a shared secret. */
+export function collectSecretIds(state) {
+  const ids = [];
+  for (const profile of state.profiles || []) {
+    for (const list of [profile.requestHeaders, profile.responseHeaders]) {
+      for (const header of list || []) {
+        if (header.secretId) ids.push(header.secretId);
+      }
+    }
+  }
+  return [...new Set(ids)];
+}
+
+export function secretRefCount(state, secretId) {
+  let count = 0;
+  for (const profile of state.profiles || []) {
+    for (const list of [profile.requestHeaders, profile.responseHeaders]) {
+      for (const header of list || []) {
+        if (header.secretId === secretId) count++;
+      }
+    }
+  }
+  return count;
 }
 
 function str(value) {
@@ -173,6 +248,7 @@ function normalizeProfile(p, i) {
     name: typeof p.name === 'string' && p.name.trim() ? p.name.slice(0, 60) : `Profile ${i + 1}`,
     color: /^#[0-9a-f]{6}$/i.test(p.color) ? p.color : PROFILE_COLORS[i % PROFILE_COLORS.length],
     enabled: p.enabled !== false,
+    allowGlobalSensitiveHeaders: p.allowGlobalSensitiveHeaders === true,
     requestHeaders: normalizeHeaders(p.requestHeaders ?? p.headers),
     responseHeaders: normalizeHeaders(p.responseHeaders ?? p.respHeaders),
     cookies: normalizeCookies(p.cookies),
@@ -192,8 +268,13 @@ function normalizeHeaders(list) {
       enabled: h.enabled !== false,
       operation: OPERATIONS.includes(h.operation) ? h.operation : 'set',
       name: str(h.name).trim(),
-      value: str(h.value),
-      comment: str(h.comment)
+      /* A sensitive header keeps no inline value: it is either resolved from
+         the secret store at rule-build time, or the profile stays locked. */
+      value: h.secretId ? '' : str(h.value),
+      comment: str(h.comment),
+      sensitive: h.sensitive === true || isSensitiveHeader({ name: str(h.name) }),
+      secretId: typeof h.secretId === 'string' && h.secretId ? h.secretId : null,
+      requiresCredential: h.requiresCredential === true
     };
   }).filter(Boolean);
 }
@@ -270,6 +351,71 @@ export async function loadState() {
   return normalize(stored.state);
 }
 
+/* ---------------------------------------------------------------- *
+ * Schema migration
+ * ---------------------------------------------------------------- */
+
+/* Detects v2-and-earlier profiles that hold credentials inline. Returns the
+   headers that need migrating without ever copying their values. */
+export function findLegacySensitiveHeaders(raw) {
+  const found = [];
+  for (const profile of raw?.profiles || []) {
+    for (const key of ['requestHeaders', 'responseHeaders']) {
+      for (const header of profile[key] || []) {
+        if (header.secretId) continue;
+        if (!isSensitiveHeader(header)) continue;
+        if (!String(header.value ?? '')) continue;
+        found.push({ profileId: profile.id, profileName: profile.name, section: key, headerId: header.id, name: header.name });
+      }
+    }
+  }
+  return found;
+}
+
+export function needsMigration(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  if ((Number(raw.version) || 0) < SCHEMA_VERSION) return true;
+  return findLegacySensitiveHeaders(raw).length > 0;
+}
+
+/* Moves inline credentials out of the profile and into the secret store.
+   Idempotent: a header that already has a secretId is left alone, so an
+   interrupted migration can simply be run again.
+
+   Returns the rewritten state plus the extracted values; the caller decides
+   which store they go into, so this function never picks a storage mode. */
+export function migrateToV3(raw) {
+  const extracted = {};
+  const state = normalize(raw);
+
+  for (const profile of state.profiles) {
+    for (const key of ['requestHeaders', 'responseHeaders']) {
+      for (const header of profile[key]) {
+        if (!isSensitiveHeader(header)) continue;
+        if (header.secretId) continue;              // already migrated
+
+        const value = String(header.value ?? '');
+        header.sensitive = true;
+        if (header.operation === 'remove') continue; // no credential involved
+
+        const secretId = blankSecretId();
+        header.secretId = secretId;
+        header.value = '';
+        header.requiresCredential = value === '';
+        if (value) extracted[secretId] = value;
+
+        state.secretsMeta[secretId] = {
+          label: `${profile.name} \u00B7 ${header.name}`,
+          createdAt: Date.now()
+        };
+      }
+    }
+  }
+
+  state.version = SCHEMA_VERSION;
+  return { state, extracted, migrated: Object.keys(extracted).length };
+}
+
 export async function saveState(state) {
   await api.storage.local.set({ state });
 }
@@ -312,9 +458,37 @@ function toOp(header) {
    cookie editor and the CSP editor. Request cookies come back separately
    because Firefox can merge them properly against the real header while
    Chrome can only append. */
-export function planProfile(profile) {
-  const requestOps = profile.requestHeaders.filter(isLive).map(toOp);
-  const responseOps = profile.responseHeaders.filter(isLive).map(toOp);
+/* `resolve(secretId)` returns the credential string or null/undefined.
+   A sensitive header whose credential cannot be resolved is dropped
+   entirely rather than sent empty — the fail-closed rule. Dropped ops are
+   reported so callers can mark the profile as needing a credential. */
+export function planProfile(profile, resolve = null) {
+  const missing = [];
+
+  const withSecret = header => {
+    if (header.operation === 'remove') return toOp(header);
+
+    /* A credential-bearing header with no secretId is unmanaged: its inline
+       value is dropped rather than sent, so hand-edited or partially
+       migrated data cannot leak a credential. */
+    if (!header.secretId) {
+      if (isSensitiveHeader(header)) {
+        missing.push(`unmanaged:${header.name.trim().toLowerCase()}`);
+        return null;
+      }
+      return toOp(header);
+    }
+
+    const value = resolve ? resolve(header.secretId) : undefined;
+    if (value == null || value === '') {
+      missing.push(header.secretId);
+      return null;
+    }
+    return { name: header.name.trim(), value, operation: header.operation || 'set' };
+  };
+
+  const requestOps = profile.requestHeaders.filter(isLive).map(withSecret).filter(Boolean);
+  const responseOps = profile.responseHeaders.filter(isLive).map(withSecret).filter(Boolean);
 
   const cookies = profile.cookies || [];
   const requestCookies = cookies
@@ -348,23 +522,24 @@ export function planProfile(profile) {
     responseOps,
     requestCookies,
     cookieMode: profile.cookieMode === 'replace' ? 'replace' : 'merge',
-    redirects
+    redirects,
+    missingSecretIds: [...new Set(missing)]
   };
 }
 
-export function profileIsActive(profile) {
-  const plan = planProfile(profile);
+export function profileIsActive(profile, resolve = null) {
+  const plan = planProfile(profile, resolve);
   return plan.requestOps.length > 0
     || plan.responseOps.length > 0
     || plan.requestCookies.length > 0
     || plan.redirects.length > 0;
 }
 
-export function countActiveHeaders(state) {
+export function countActiveHeaders(state, resolve = null) {
   if (state.paused) return 0;
   return state.profiles.reduce((total, profile) => {
     if (!profile.enabled) return total;
-    const plan = planProfile(profile);
+    const plan = planProfile(profile, resolve);
     return total
       + plan.requestOps.length
       + plan.responseOps.length

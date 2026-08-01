@@ -4,6 +4,8 @@
 
 Add, rewrite, and remove HTTP request and response headers from your browser toolbar. Group rules into profiles, scope them to the URLs you care about, and flip the whole thing off with one keystroke.
 
+Headers that carry credentials — `Authorization`, `Cookie`, API keys — are recognised on sight and handled apart from the rest of your configuration: encrypted behind a passphrase, or held in memory for a single session. See [Credential security](#credential-security).
+
 Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no network calls — everything stays on your machine.
 
 ---
@@ -17,14 +19,24 @@ Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no
 - Autocomplete for common request and response header names
 - Live count of active rules on the toolbar badge
 
-![Request and response headers](images/screenshot-1-requestHeaders.png)
+![The Request tab: rows set, appended, or removed, one disabled without being deleted, and an Authorization row whose token is stored as a credential with controls to reveal or replace it](images/screenshot-1-headers.png)
+
+**Credential security**
+- `Authorization`, `Cookie`, API keys and common vendor variants are recognised as credentials automatically — and the shield button on any row marks a header no list would guess
+- Three storage modes: memory-only for the session (default), an encrypted vault behind a passphrase, or the original persistent plaintext if you need it
+- Credential headers stay inactive until their profile has a real URL or host filter, so a token can't be broadcast to every site you visit
+- A warning when a credential profile targets a plain `http://` host
+- Lock from the title bar or let it auto-lock — locking freezes only the profiles holding credentials
+- Exports and clipboard copies omit credentials unless you ask otherwise
+
+![The Credential Security panel: host restrictions for credential-bearing headers, the three storage modes with encrypted vault selected, and the vault locking controls](images/screenshot-2-security.png)
+
+![A locked vault: the profile holding credentials shows an unlock panel in place of its rows and its rules stop being applied, while profiles without credentials stay editable](images/screenshot-3-locked.png)
 
 **Cookie editor**
 - Edit individual cookies instead of hand-writing the whole `Cookie` header
 - Request cookies merge with what the browser already sends, or replace it entirely
 - Response cookies become `Set-Cookie` with full attribute control: Path, Domain, Max-Age, SameSite, Secure, HttpOnly
-
-![Cookie editor](images/screenshot-2-cookies.png)
 
 **Content-Security-Policy editor**
 - Leave CSP alone, strip it entirely, or replace it with a policy you compose
@@ -32,18 +44,16 @@ Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no
 - Live preview of the exact header that will be sent
 - Toggle between enforcing and `Report-Only`
 
-![Content-Security-Policy editor](images/screenshot-3-csp.png)
-
-**Redirects**
-- Send matching requests somewhere else — handy for pointing a CDN asset at localhost
-- Match by substring or regex, with `\\1` capture-group substitution in the target
-
-![Redirects](images/screenshot-4-redirects.png)
+![The Cookies tab editing individual cookies and merging them with what the browser already sends, alongside the CSP tab replacing the policy one directive at a time](images/screenshot-4-cookies-csp.png)
 
 **Profiles**
 - Unlimited independent header sets, each with its own name and colour
 - All enabled profiles apply at once, so you can layer an auth-token profile over a feature-flag profile
 - Duplicate, rename, recolour, and delete from the profile menu
+
+**Redirects**
+- Send matching requests somewhere else — handy for pointing a CDN asset at localhost
+- Match by substring or regex, with `\\1` capture-group substitution in the target
 
 **Filtering**
 - `URL contains` — plain substring match
@@ -54,7 +64,7 @@ Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no
 - `Tab` / `Window` — scope a profile to one tab or window, with a **Use current** button that fills in the id for you
 - Leave filters empty and the profile applies everywhere
 
-![Filters](images/screenshot-5-filters.png)
+![The Redirects tab pointing CDN assets at localhost by substring and by regex, alongside the Filters tab narrowing a profile with a URL match, an exclusion, and a tab id](images/screenshot-5-redirects-filters.png)
 
 **Everything else**
 - Global on/off switch, plus `Alt+Shift+H` from anywhere
@@ -67,7 +77,7 @@ Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no
 
 ---
 
-## Install
+## Install From Source
 
 ### Requirements
 
@@ -78,7 +88,7 @@ Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no
 
 ### Chromium (Chrome, Edge, Brave, Vivaldi, Opera)
 
-The extension isn't on the Chrome Web Store, so it loads unpacked:
+The extension loads unpacked:
 
 1. Download and unzip the release. Put the folder somewhere permanent — the browser reads it from disk at every startup, so don't leave it in Downloads.
 2. Open `chrome://extensions` (`edge://extensions` on Edge, `brave://extensions` on Brave, and so on).
@@ -153,6 +163,36 @@ Every enabled profile is live at the same time. When two profiles touch the same
 
 ---
 
+## Credential security
+
+Some headers carry credentials. `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-API-Key`, `X-Auth-Token` and vendor variants like `X-Acme-Api-Key` are recognised case-insensitively. Any other header can be marked as a credential with the shield button on its row — no built-in list covers every vendor's naming. Cookies from the Cookie editor count by construction, since they compose `Cookie` and `Set-Cookie`.
+
+**A credential needs a host.** A rule with no URL filter applies to every request your browser makes. Harmless for `X-Debug: 1`; for `Authorization: Bearer …` it means your token goes to every site you visit, any of which can log it and replay it. So a credential-bearing header stays inactive until its profile has a meaningful URL or host filter — a bare `*`, `<all_urls>` or `^.*$` restricts nothing and doesn't count. If you genuinely need one everywhere, you can override it for that one profile without weakening the others. You're also warned when a credential profile targets a plain `http://` host, with `localhost`, `127.0.0.1`, `[::1]` and `*.local` exempt.
+
+**Three storage modes**, chosen in the Security panel:
+
+| Mode | Where the value lives | After a browser restart |
+|---|---|---|
+| **Session only** *(default)* | `storage.session` — memory, never written to disk | Gone. Profiles are preserved and marked as needing a credential |
+| **Encrypted vault** | AES-GCM ciphertext in local storage; key derived from your passphrase with PBKDF2, 600,000 SHA-256 iterations | Locked until you enter the passphrase |
+| **Persistent plaintext** | Unencrypted in the browser profile directory | Still active |
+
+Persistent plaintext is the extension's original behaviour, kept for people who need it and gated behind an explicit confirmation. Anything that can read your browser profile directory can read those values, and they stay readable after the browser closes.
+
+**Locking freezes credentials, not the extension.** Lock from the title bar, from the Security panel, or let auto-lock do it. A locked vault stops applying rules from any profile that holds credentials and shows an unlock panel in place of its rows; nothing is deleted. Profiles without credentials keep applying and stay fully editable. The auto-lock timer measures time since your last deliberate credential action — unlocking, editing, revealing, exporting — and deliberately ignores network activity, so a background tab polling an API won't hold the vault open.
+
+**Exports and copies leave credentials out by default.** A configuration-only export carries profiles, filters and redirects with each credential replaced by `"value": null, "requiresCredential": true`; it imports cleanly and stays locked until you supply the values. An encrypted backup is available in vault mode and asks for your passphrase again even when unlocked. A plaintext export exists, is warned about, and is never the default. Imports never activate plaintext credentials silently, and an imported profile doesn't inherit permission to send credentials globally.
+
+### What this doesn't protect against
+
+The vault protects credentials **at rest**: someone who copies your browser profile off disk, restores it from a backup, or reads a synced copy can't recover them without the passphrase. It does not protect against malware running as your user account, a malicious extension, or a hostile server you've legitimately scoped a profile to. While the vault is unlocked the derived key is cached in session storage, and anything that can run code in the extension's context can use it — lock the vault when you step away from the machine. A passphrase you can remember is also one that can be guessed given the ciphertext; PBKDF2 makes that expensive rather than impossible, so use a long one.
+
+There is no passphrase recovery, by design. **Security → Reset vault** permanently deletes every encrypted credential and keeps your profiles, filters, redirects and non-sensitive headers.
+
+[SECURITY.md](SECURITY.md) covers all of this in full, including the per-browser differences and the migration path for profiles created before this feature existed.
+
+---
+
 ## Chromium and Firefox behave slightly differently
 
 Chromium removed blocking `webRequest` in Manifest V3, so the Chromium build uses `declarativeNetRequest`. Firefox kept blocking `webRequest`, which is better suited to this job, so the Firefox build uses that. The interface is identical; the engine underneath is not.
@@ -165,6 +205,7 @@ Chromium removed blocking `webRequest` in Manifest V3, so the Chromium build use
 | **Exclude URL** filters | Suppress every profile's rules for that request | Scoped to the profile that defines them |
 | Rule ceiling | 5000 rules, 1000 with regex | No ceiling |
 | Site access | Granted at install, permanent | Revocable at any time |
+| When a credential is locked or missing | The whole rule containing it is withheld | Only that header operation is skipped |
 
 Both differences come from the same root cause: Chromium's `declarativeNetRequest` cannot read a request before deciding what to do with it, while Firefox's `webRequest` can. If a duplicate cookie matters to you on Chromium, use **Replace all cookies** instead of merge.
 
@@ -180,7 +221,8 @@ Chromium's `append` allowlist is: `accept`, `accept-encoding`, `accept-language`
 - **Header names are case-insensitive to servers.** Chromium lowercasing them changes nothing functionally — it matches how HTTP/2 and HTTP/3 work on the wire.
 - **A few headers can't be modified.** Both browsers reserve some for their own use. On Chromium, the reason appears in the status bar at the bottom of the popup.
 - **Profiles are stored locally, not synced.** They stay on the machine you created them on. Use export and import to move them.
-- **This is a developer tool.** Setting `Authorization` or `Cookie` headers globally will send your credentials to every site you visit. Scope those profiles with a URL filter.
+- **This is a developer tool.** Credential headers are held back until their profile has a real URL filter, but that guard is only as good as the filter you write. Scope a credential profile to the host that issued the token, not to a pattern that happens to include it.
+- **A locked vault only affects profiles that hold credentials.** Everything else keeps applying and stays editable, so locking isn't a way to turn the extension off — the toggle and `Alt+Shift+H` are.
 - **Removing CSP weakens the page you're testing.** It's the right tool for debugging a policy that blocks your tooling, but scope it to the site you're working on rather than leaving it on everywhere.
 - **Redirects apply before headers.** A request that gets redirected is matched again at its new URL, so a profile filtered on the old host won't touch the redirected request.
 
@@ -192,12 +234,20 @@ OpenModHeader collects nothing and transmits nothing. It makes no network reques
 
 The permission to read and change data on all websites is what makes header editing possible. It is not used for anything else.
 
+Credentials never leave your machine either. Encryption is done with the browser's own Web Crypto, there is no key escrow and no recovery service, and no passphrase or derived key is ever written to disk.
+
 ---
 
 ## Troubleshooting
 
 **Headers aren't being applied.**
 Check the toggle in the popup's title bar isn't off, that the profile's checkbox tabs aren't unticked, and that any URL filter actually matches. Then reload the page — requests already in flight keep their original headers.
+
+**A profile shows a padlock and its rules aren't applying.**
+It holds credentials and the vault is locked. Click **Unlock** in the bar at the top of the popup. In session-only mode there's no vault to unlock — the credential was cleared when the browser session ended, so re-enter it on the header row.
+
+**A credential header is being ignored even though the profile is enabled.**
+Credential-bearing headers need a meaningful URL or host filter before they activate, and `*` or `<all_urls>` doesn't count. Add a real filter on the Filters tab, or override the requirement for that profile in the Security panel.
 
 **Nothing works on Firefox specifically.**
 Almost always missing site access. Open the popup and look for the red bar, or check the extensions button in the toolbar.
@@ -227,14 +277,21 @@ chromium/   load this folder in Chrome, Edge, Brave, and other Chromium browsers
 firefox/    source for the Firefox build; package as .xpi
 ```
 
-`common.js`, `popup.html`, `popup.css`, and `popup.js` are byte-identical between the two. Only `manifest.json` and `background.js` differ.
+Every file is byte-identical between the two builds except `manifest.json` and `background.js`. The security code in particular is shared verbatim, so the two browsers cannot disagree about whether a profile is allowed to activate.
 
 | File | Role |
 |---|---|
 | `manifest.json` | Permissions, background entry point, popup, keyboard shortcut |
 | `common.js` | State model, JSON normalisation, shared constants |
+| `common-api.js` | Browser API shim — `browser.*` on Firefox, `chrome.*` on Chromium |
 | `background.js` | The engine — `declarativeNetRequest` on Chromium, `webRequest` on Firefox |
+| `security.js` | Credential policy: sensitive-header recognition and host rules. Pure functions, no storage or crypto |
+| `vault.js` | AES-GCM encryption and PBKDF2 key derivation over Web Crypto |
+| `secretstore.js` | Credential storage across the three modes, plus vault lock state |
 | `popup.html` / `popup.css` / `popup.js` | The interface |
+| `popup-security.js` | Security panel, unlock flow, and every credential prompt |
+| `icons.js` | Inline SVG icons for the interface |
 | `icons/` | Toolbar icons |
+| `SECURITY.md` | Credential-handling reference, shipped with each build |
 
 ---

@@ -1,12 +1,20 @@
 /* OpenModHeader — popup controller. */
 
 import {
-  api, loadState, saveState, normalize, defaultState,
+  api, loadState, saveState, normalize, defaultState, blankSecretId, secretRefCount,
   blankHeader, blankCookie, blankCspDirective, blankRedirect, blankFilter, blankProfile,
   PROFILE_COLORS, FILTER_TYPES, OPERATIONS, CSP_MODES, CSP_DIRECTIVES,
   REDIRECT_TYPES, SAME_SITE_VALUES, COMMON_REQUEST_HEADERS, COMMON_RESPONSE_HEADERS,
   APPENDABLE_REQUEST_HEADERS, buildCspPolicy, countActiveHeaders, planProfile
 } from './common.js';
+import {
+  isSensitiveHeader, isSensitiveHeaderName, evaluateProfile, describeBlock
+} from './security.js';
+import {
+  resolveSecrets, isUnlocked, lock, noteActivity, ACTIVITY, deleteSecret
+} from './secretstore.js';
+import * as sec from './popup-security.js';
+import { icon, hydrateIcons } from './icons.js';
 
 const $ = id => document.getElementById(id);
 
@@ -17,6 +25,14 @@ let saveTimer = null;
 let confirmTimer = null;
 let searchTerm = '';
 let expandedRows = new Set();
+let secretIds = new Set();      // which credentials are currently resolvable
+/* Header ids whose credential is currently shown in the clear, and the values
+   backing them. Kept in module memory only — never written to storage, never
+   placed in a DOM attribute — and dropped whenever the vault locks. */
+let revealedHeaders = new Set();
+let revealedValues = new Map();
+let unlocked = true;
+let blockedProfiles = [];
 
 /* Undo history of serialised states. */
 let undoStack = [];
@@ -45,6 +61,17 @@ function el(tag, props = {}, ...kids) {
   return node;
 }
 
+/* Element.append() stringifies non-Node arguments, so a conditional child of
+   `null` renders the literal text "null". Every conditional append goes
+   through here instead. */
+function appendKids(node, ...kids) {
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue;
+    node.append(kid);
+  }
+  return node;
+}
+
 function textInput(props) {
   return el('input', { type: 'text', spellcheck: 'false', autocomplete: 'off', ...props });
 }
@@ -52,6 +79,21 @@ function textInput(props) {
 /* ---------------------------------------------------------------- *
  * State plumbing
  * ---------------------------------------------------------------- */
+
+/* A profile is locked out when the vault is locked and it holds credentials.
+   Credential-free profiles keep working normally, and their configuration is
+   still saved — only the credential-bearing ones freeze. */
+function profileIsLocked(profile) {
+  if (state.settings.credentialStorage !== 'vault') return false;
+  if (unlocked) return false;
+  return profileUsesCredentials(profile);
+}
+
+function profileUsesCredentials(profile) {
+  const headers = [...(profile.requestHeaders || []), ...(profile.responseHeaders || [])];
+  if (headers.some(h => isSensitiveHeader(h) && h.operation !== 'remove')) return true;
+  return (profile.cookies || []).some(c => c.enabled && c.name.trim());
+}
 
 function activeProfile() {
   return state.profiles.find(p => p.id === state.activeProfileId) || state.profiles[0];
@@ -104,6 +146,10 @@ function restructure() {
  * ---------------------------------------------------------------- */
 
 function renderAll() {
+  /* Security is app-level configuration, not per-profile content, so it takes
+     over the whole panel instead of competing for room in the tab strip. */
+  const inSettings = section === 'security';
+
   document.body.dataset.section = section;
   document.body.classList.toggle('off', state.paused);
   $('power').checked = !state.paused;
@@ -118,13 +164,22 @@ function renderAll() {
     cookies: 'Add cookie',
     csp: 'Add directive',
     redirects: 'Add redirect',
-    filters: 'Add filter'
+    filters: 'Add filter',
+    security: ''
   }[section];
-  $('profile-search').hidden = state.profiles.length < 6;
+  const locked = profileIsLocked(activeProfile());
+  $('btn-add').hidden = inSettings || locked;
+  $('btn-undo').disabled = undoStack.length === 0 || locked;
+  $('settings-bar').hidden = !inSettings;
+  document.querySelector('.sections').hidden = inSettings;
+  $('profiles').hidden = inSettings;
+  $('btn-security').classList.toggle('active', inSettings);
+  $('profile-search').hidden = inSettings || state.profiles.length < 6;
   renderProfiles();
   renderRows();
   renderTallies();
   renderStatus();
+  renderBanners();
 }
 
 function renderProfiles() {
@@ -149,18 +204,20 @@ function renderProfiles() {
       }
     },
       el('span', { class: 'chip-dot' }),
+      profileIsLocked(profile) ? el('span', { class: 'chip-lock' }, icon('lock', { size: 10 })) : null,
       el('span', { class: 'chip-name', text: profile.name }),
-      isActive ? el('span', { class: 'chip-caret', text: '\u25BC' }) : null
+      isActive ? el('span', { class: 'chip-caret' }, icon('caret', { size: 10 })) : null
     );
     nav.append(chip);
   }
 
   nav.append(el('button', {
-    class: 'chip-add', title: 'Add a profile', text: '+', onclick: addProfile
-  }));
+    class: 'chip-add', title: 'Add a profile', onclick: addProfile
+  }, icon('plus', { size: 13 })));
 }
 
 function sectionCount(profile, key) {
+  if (key === 'security') return blockedProfiles.length;
   if (key === 'csp') {
     const csp = profile.csp;
     if (csp.mode === 'remove') return 1;
@@ -179,6 +236,11 @@ function renderTallies() {
     const count = sectionCount(profile, node.dataset.tally);
     node.textContent = count ? String(count) : '';
   }
+  const attention = blockedProfiles.length;
+  $('settings-tally').textContent = attention
+    ? `${attention} need${attention === 1 ? 's' : ''} attention`
+    : '';
+  $('btn-security').classList.toggle('flagged', attention > 0);
 }
 
 function renderRows() {
@@ -186,6 +248,15 @@ function renderRows() {
   content.textContent = '';
   const profile = activeProfile();
 
+  if (section === 'security') {
+    return sec.renderSecurityPanel(content, state, {
+      save, rerender: refreshAndRender, flash
+    });
+  }
+
+  /* Everything below edits credential-bearing content, so a locked profile
+     gets the unlock panel instead. The Security tab stays reachable. */
+  if (profileIsLocked(profile)) return content.append(lockedPanel(profile));
   if (section === 'csp') return renderCsp(content, profile);
   if (section === 'cookies') return renderCookies(content, profile);
 
@@ -198,6 +269,28 @@ function renderRows() {
   }[section];
 
   for (const item of list) content.append(build(profile, item));
+}
+
+function lockedPanel(profile) {
+  return el('div', { class: 'locked-panel' },
+    el('div', { class: 'locked-icon' }, icon('lock', { size: 26, stroke: 1.6 })),
+    el('h3', { class: 'locked-title', text: `"${profile.name}" is locked` }),
+    el('p', { class: 'locked-body', text:
+      'This profile uses stored credentials, so it cannot be viewed or edited until the '
+      + 'vault is unlocked. Its rules are not being applied.' }),
+    el('p', { class: 'locked-body muted', text:
+      'Profiles without credentials are unaffected and can still be edited.' }),
+    el('button', {
+      class: 'primary-btn',
+      text: 'Unlock the vault',
+      onclick: async () => {
+        if (await sec.unlockFlow(state)) {
+          await refreshAndRender();
+          flash('Vault unlocked. Protected profiles are active again.');
+        }
+      }
+    })
+  );
 }
 
 function emptyState() {
@@ -215,7 +308,7 @@ function emptyState() {
       text: 'Edit individual cookies instead of the whole header. Add one to get started.'
     },
     redirects: {
-      line: 'cdn.example.com \u2192 localhost:3000',
+      line: 'cdn.example.com to localhost:3000',
       text: 'Send matching requests somewhere else. Add a redirect to get started.'
     },
     filters: {
@@ -249,25 +342,25 @@ function checkbox(item, row, onchange) {
 
 function deleteButton(profile, key, item) {
   return el('button', {
-    class: 'del-btn', title: 'Remove this row', text: '\u2715',
+    class: 'del-btn', title: 'Remove this row',
     onclick: () => {
       profile[key] = profile[key].filter(x => x.id !== item.id);
       restructure();
     }
-  });
+  }, icon('close', { size: 12 }));
 }
 
 /* A comment lives on its own line under the row, hidden until asked for. */
 function commentToggle(item, wrapper) {
   return el('button', {
     class: `note-btn${item.comment ? ' has-note' : ''}`,
-    title: 'Add a comment', text: '\u270E',
+    title: 'Add a comment',
     onclick: () => {
       const open = expandedRows.has(item.id);
       open ? expandedRows.delete(item.id) : expandedRows.add(item.id);
       renderCommentLine(item, wrapper);
     }
-  });
+  }, icon('pencil', { size: 12 }));
 }
 
 function renderCommentLine(item, wrapper) {
@@ -285,7 +378,7 @@ function renderCommentLine(item, wrapper) {
 }
 
 function wrapRow(row, item) {
-  const wrapper = el('div', { class: 'row-group' }, row);
+  const wrapper = el('div', { class: 'row-group', dataset: { id: item.id } }, row);
   renderCommentLine(item, wrapper);
   return wrapper;
 }
@@ -298,21 +391,59 @@ function headerRow(profile, header) {
   const row = el('div', { class: `row${header.enabled ? '' : ' disabled'}` });
   const wrapper = wrapRow(row, header);
 
-  const valueInput = textInput({
-    class: 'h-value',
-    placeholder: header.operation === 'remove' ? 'removed from the request' : 'value',
-    value: header.value,
-    disabled: header.operation === 'remove',
-    oninput: event => { header.value = event.target.value; touch(); }
-  });
+  const sensitive = isSensitiveHeader(header);
+
+  /* A credential is never bound into the DOM: the field is a placeholder and
+     the real value lives in the secret store. */
+  const shown = revealedHeaders.has(header.id) && revealedValues.has(header.id);
+  const valueInput = sensitive && header.operation !== 'remove'
+    ? textInput({
+        class: `h-value${shown ? ' revealed' : ''}`,
+        placeholder: header.secretId && secretIds.has(header.secretId)
+          ? '\u2022'.repeat(12) + '  (stored)'
+          : 'credential required',
+        value: shown ? revealedValues.get(header.id) : '',
+        /* Read-only rather than disabled once revealed, so the value can be
+           selected and copied. Editing still goes through the credential
+           dialog so it is written to the secret store. */
+        readonly: shown ? true : null,
+        disabled: shown ? null : true
+      })
+    : textInput({
+        class: 'h-value',
+        placeholder: header.operation === 'remove' ? 'removed from the request' : 'value',
+        value: header.value,
+        disabled: header.operation === 'remove',
+        oninput: event => { header.value = event.target.value; touch(); }
+      });
 
   const nameInput = textInput({
     class: 'h-name', placeholder: 'Header-Name', value: header.name,
     list: section === 'requestHeaders' ? 'request-header-names' : 'response-header-names',
-    oninput: event => { header.name = event.target.value; flagRow(row, header); touch(); }
+    oninput: event => {
+      const wasSensitive = isSensitiveHeader(header);
+      header.name = event.target.value;
+      flagRow(row, header);
+
+      /* Typing a credential-bearing name mid-edit must swap the row over to
+         the secret-store field immediately, or the user would be typing a
+         credential straight into the profile object. */
+      if (isSensitiveHeader(header) !== wasSensitive) {
+        const caret = event.target.selectionStart;
+        header.value = '';
+        restructure();
+        const again = $('content').querySelector(`.row-group[data-id="${header.id}"] .h-name`);
+        if (again) {
+          again.focus();
+          try { again.setSelectionRange(caret, caret); } catch { /* ignore */ }
+        }
+        return;
+      }
+      touch();
+    }
   });
 
-  row.append(
+  appendKids(row,
     checkbox(header, row),
     el('select', {
       class: 'op-select', title: 'What to do with this header',
@@ -321,18 +452,97 @@ function headerRow(profile, header) {
         valueInput.disabled = header.operation === 'remove';
         valueInput.placeholder = header.operation === 'remove' ? 'removed from the request' : 'value';
         flagRow(row, header);
-        touch();
+        restructure();
       }
     }, OPERATIONS.map(op => el('option', { value: op, selected: header.operation === op, text: op }))),
     el('div', { class: 'wire' },
       nameInput, el('span', { class: 'colon', text: ':' }), valueInput
     ),
+    sensitive && header.operation !== 'remove' ? credentialChip(profile, header) : null,
+    credentialToggle(header),
     commentToggle(header, wrapper),
     deleteButton(profile, section, header)
   );
 
+  if (sensitive) row.classList.add('locked');
   flagRow(row, header);
   return wrapper;
+}
+
+/* FEATURE: let the user mark any header as credential-bearing, since the
+   built-in list cannot know every vendor's header name. Auto-detected names
+   cannot be un-marked. */
+function credentialToggle(header) {
+  const auto = isSensitiveHeaderName(header.name);
+  const on = isSensitiveHeader(header);
+
+  return el('button', {
+    class: `mark-btn${on ? ' on' : ''}${auto ? ' locked-on' : ''}`,
+    title: auto
+      ? `${header.name} is always treated as a credential`
+      : (on ? 'Marked as a credential \u2014 click to unmark'
+            : 'Mark this header as a credential'),
+    onclick: () => {
+      if (auto) return flash(`${header.name} is always treated as a credential.`);
+      header.sensitive = !header.sensitive;
+      /* Moving into credential handling must not leave the typed value behind
+         in the profile object. */
+      if (header.sensitive) header.value = '';
+      restructure();
+    }
+  }, icon('key', { size: 13 }));
+}
+
+/* The only entry point for editing a credential from a header row. Stored
+   credentials get a separate reveal action so viewing and replacing are
+   distinct, deliberate choices. */
+function credentialChip(profile, header) {
+  const stored = header.secretId && secretIds.has(header.secretId);
+  const shared = header.secretId && secretRefCount(state, header.secretId) > 1;
+
+  const commit = async changed => {
+    if (!changed) return;
+    await save({ now: true });
+    await refreshAndRender();
+    sec.notifyBackground('apply');
+  };
+
+  const setBtn = el('button', {
+    class: `secret-chip${stored ? (shared ? ' shared' : '') : ' needs'}`,
+    text: !stored ? 'Set credential' : (shared ? 'Shared' : 'Change'),
+    title: shared
+      ? 'Shared with another profile. Changing it affects both.'
+      : 'Enter or replace the stored credential',
+    onclick: async () => {
+      if (!await sec.confirmSensitiveHost(profile, state)) return;
+      await sec.warnInsecureHosts(profile, state);
+      await commit(await sec.promptCredential(header, state));
+    }
+  });
+
+  if (!stored) return setBtn;
+
+  const shown = revealedHeaders.has(header.id);
+
+  return el('span', { class: 'chip-pair' },
+    el('button', {
+      class: `secret-chip reveal${shown ? ' on' : ''}`,
+      title: shown ? 'Hide the credential' : 'Show the credential',
+      onclick: async () => {
+        if (shown) {
+          revealedHeaders.delete(header.id);
+          revealedValues.delete(header.id);
+          return restructure();
+        }
+        const value = await sec.revealCredentialValue(header, state);
+        if (value == null) return;
+        revealedHeaders.add(header.id);
+        revealedValues.set(header.id, value);
+        await refreshAndRender();
+      }
+    }, icon(shown ? 'eyeOff' : 'eye', { size: 13 })),
+    setBtn
+  );
 }
 
 /* Chrome rejects `append` on request headers outside a fixed allowlist. */
@@ -432,12 +642,12 @@ function cookieRow(profile, cookie) {
       })
     ),
     el('button', {
-      class: 'note-btn', title: 'Cookie attributes', text: '\u2699',
+      class: 'note-btn', title: 'Cookie attributes',
       onclick: () => {
         expandedRows.has(attrsId) ? expandedRows.delete(attrsId) : expandedRows.add(attrsId);
         renderAttrs();
       }
-    }),
+    }, icon('gear', { size: 12 })),
     deleteButton(profile, 'cookies', cookie)
   );
 
@@ -479,7 +689,7 @@ function renderCsp(content, profile) {
 
   if (csp.mode === 'remove') {
     return content.append(el('div', { class: 'empty' },
-      el('p', { class: 'empty-line', text: 'Content-Security-Policy: \u2717' }),
+      el('p', { class: 'empty-line', text: 'Content-Security-Policy: removed' }),
       el('p', { text: 'Both Content-Security-Policy and Content-Security-Policy-Report-Only are stripped from every matching response. Useful for testing against a page whose policy blocks your tooling.' })
     ));
   }
@@ -527,7 +737,7 @@ function cspRow(profile, directive) {
       })
     ),
     el('button', {
-      class: 'del-btn', title: 'Remove this directive', text: '\u2715',
+      class: 'del-btn', title: 'Remove this directive',
       onclick: () => {
         profile.csp.directives = profile.csp.directives.filter(d => d.id !== directive.id);
         restructure();
@@ -571,7 +781,7 @@ function redirectRow(profile, redirect) {
       el('option', { value, selected: redirect.type === value, text: meta.label })
     )),
     el('div', { class: 'wire' }, fromInput),
-    el('span', { class: 'redirect-arrow', text: '\u2192' }),
+    el('span', { class: 'redirect-arrow' }, icon('redirect', { size: 13 })),
     el('div', { class: 'wire' },
       textInput({
         class: 'h-value',
@@ -663,7 +873,19 @@ function renderStatus() {
     return;
   }
 
-  const total = countActiveHeaders(state);
+  if (state.settings.credentialStorage === 'vault' && !unlocked) {
+    node.textContent = 'Vault locked. Protected profiles are inactive.';
+    return;
+  }
+
+  if (blockedProfiles.length) {
+    const first = blockedProfiles[0];
+    node.classList.add('error');
+    node.textContent = `${first.profileName}: ${describeBlock(first.reasons)}`;
+    return;
+  }
+
+  const total = countActiveHeaders(state, id => (secretIds.has(id) ? '\u2022' : undefined));
   if (!total) {
     node.textContent = 'Nothing active. Tick a row to start.';
     return;
@@ -691,6 +913,10 @@ function addProfile() {
 }
 
 function openProfileMenu(anchor, profile) {
+  if (profileIsLocked(profile)) {
+    flash('Unlock the vault to change this profile.');
+    return;
+  }
   const menu = $('profile-menu');
   const nameField = $('profile-name');
   nameField.value = profile.name;
@@ -720,7 +946,10 @@ function openProfileMenu(anchor, profile) {
     }));
   }
 
-  $('btn-duplicate').onclick = () => {
+  $('btn-duplicate').onclick = async () => {
+    const mode = await sec.chooseDuplicationMode(profile);
+    if (!mode) return;
+
     const copy = structuredClone(profile);
     copy.id = crypto.randomUUID();
     copy.name = `${profile.name} copy`;
@@ -728,20 +957,37 @@ function openProfileMenu(anchor, profile) {
       copy[key].forEach(item => { item.id = crypto.randomUUID(); });
     }
     copy.csp.directives.forEach(d => { d.id = crypto.randomUUID(); });
+
+    const needNewSecrets = sec.applyDuplicationMode(copy, mode);
     state.profiles.push(copy);
     state.activeProfileId = copy.id;
-    save();
     closePopovers();
+
+    for (const header of needNewSecrets) {
+      await sec.promptCredential(header, state, {
+        title: `New credential for ${header.name}`
+      });
+    }
+
+    await save({ now: true });
+    await refreshSecrets();
     renderAll();
+    if (mode === 'share') flash('The copy shares the original credential. Changing it affects both.');
   };
 
-  armConfirm($('btn-delete-profile'), 'Delete', 'Click again to delete', () => {
+  armConfirm($('btn-delete-profile'), 'Delete', 'Click again to delete', async () => {
     state.profiles = state.profiles.filter(p => p.id !== profile.id);
     if (!state.profiles.length) state.profiles.push(blankProfile(1, 0));
     state.activeProfileId = state.profiles[0].id;
-    save();
+    await save({ now: true });
+    /* Only secrets no surviving profile references are removed, so a shared
+       credential outlives the deletion of one of its users. */
+    const removed = await sec.cleanupSecretsAfterDelete(state);
+    await save({ now: true });
+    await refreshSecrets();
     closePopovers();
     renderAll();
+    if (removed.length) flash(`Profile deleted. ${removed.length} unused credential(s) removed.`);
   });
 
   placePopover(menu, anchor);
@@ -804,44 +1050,152 @@ document.addEventListener('keydown', event => {
  * Import / export
  * ---------------------------------------------------------------- */
 
-function exportPayload() {
-  return JSON.stringify({ app: 'OpenModHeader', version: 2, profiles: state.profiles }, null, 2);
-}
-
-function exportFile() {
-  const blob = new Blob([exportPayload()], { type: 'application/json' });
+function download(text, filename) {
+  const blob = new Blob([text], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
-  const stamp = new Date().toISOString().slice(0, 10);
-  const link = el('a', { href: url, download: `openmodheader-${stamp}.json` });
+  const link = el('a', { href: url, download: filename });
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function exportFile() {
   closePopovers();
+  const stamp = new Date().toISOString().slice(0, 10);
+  const mode = await sec.chooseExportMode(state);
+  if (!mode) return;
+
+  if (mode === 'config') {
+    const payload = await sec.buildExportPayload(state, { includeSecrets: false });
+    download(JSON.stringify(payload, null, 2), `openmodheader-${stamp}.json`);
+    return flash('Exported without credentials.');
+  }
+
+  if (mode === 'backup') {
+    const backup = await sec.makeEncryptedBackup(state);
+    if (!backup) return;
+    download(JSON.stringify(backup, null, 2), `openmodheader-backup-${stamp}.json`);
+    return flash('Encrypted backup created.');
+  }
+
+  if (!await sec.reauthenticate(state, 'export credentials in plain text')) return;
+  const payload = await sec.buildExportPayload(state, { includeSecrets: true });
+  download(JSON.stringify(payload, null, 2), `openmodheader-PLAINTEXT-${stamp}.json`);
+  flash('Exported with credentials in plain text. Handle the file carefully.');
 }
 
 async function copyJson() {
+  closePopovers();
+  const mode = await sec.chooseCopyMode();
+  if (!mode) return;
+
+  if (mode === 'secrets'
+      && !await sec.reauthenticate(state, 'copy credentials to the clipboard')) {
+    return;
+  }
+
+  const payload = await sec.buildExportPayload(state, { includeSecrets: mode === 'secrets' });
   try {
-    await navigator.clipboard.writeText(exportPayload());
-    flash('Copied to the clipboard.');
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    flash(mode === 'secrets'
+      ? 'Copied with credentials. Clipboard history tools may retain them.'
+      : 'Copied without credentials.');
   } catch {
     flash('Could not reach the clipboard. Use the file export instead.');
   }
-  closePopovers();
 }
 
 async function importFile(file) {
+  let parsed;
   try {
-    const parsed = JSON.parse(await file.text());
-    const incoming = normalize(Array.isArray(parsed) ? { profiles: parsed } : parsed);
-    state.profiles = state.profiles.concat(incoming.profiles);
-    state.activeProfileId = incoming.profiles[0].id;
-    await save({ now: true });
-    renderAll();
-    flash(`Imported ${incoming.profiles.length} profile${incoming.profiles.length === 1 ? '' : 's'}.`);
+    parsed = JSON.parse(await file.text());
   } catch {
-    flash('That file is not valid OpenModHeader JSON.');
+    return flash('That file is not valid OpenModHeader JSON.');
   }
+
+  /* An encrypted backup needs its own passphrase before anything is read. */
+  if (parsed?.kind === 'openmodheader-encrypted-backup') {
+    const restored = await sec.restoreBackup(parsed);
+    if (restored == null) return;
+    if (restored === 'incorrect') return flash('That backup passphrase is not correct.');
+    parsed = restored;
+  }
+
+  const carriesSecrets = collectImportedSecrets(parsed);
+  if (carriesSecrets.count > 0
+      && !await sec.confirmImportedCredentials(carriesSecrets.count, state)) {
+    return;
+  }
+
+  let incoming;
+  try {
+    incoming = normalize(Array.isArray(parsed) ? { profiles: parsed } : parsed);
+  } catch {
+    return flash('That file is not valid OpenModHeader JSON.');
+  }
+  if (!incoming.profiles.length) return flash('That file contains no profiles.');
+
+  /* Imported credentials are stored under the mode in force now, never the
+     mode the file was written with. */
+  const values = carriesSecrets.values;
+  for (const profile of incoming.profiles) {
+    for (const key of ['requestHeaders', 'responseHeaders']) {
+      for (const header of profile[key]) {
+        if (!isSensitiveHeader(header)) continue;
+        header.sensitive = true;
+        if (header.operation === 'remove') continue;
+
+        const imported = values.get(`${profile.name}\u0000${header.name}`);
+        if (imported != null && imported !== '') {
+          header.secretId = header.secretId || blankSecretId();
+          await sec.storeImportedSecret(header.secretId, imported, state);
+          header.requiresCredential = false;
+        } else {
+          header.requiresCredential = true;
+          if (!header.secretId) header.secretId = null;
+        }
+        header.value = '';
+      }
+    }
+    /* An imported profile never inherits a global-sensitive override; it must
+       be re-granted deliberately after review. */
+    profile.allowGlobalSensitiveHeaders = false;
+  }
+
+  state.profiles = state.profiles.concat(incoming.profiles);
+  state.activeProfileId = incoming.profiles[0].id;
+  Object.assign(state.secretsMeta, incoming.secretsMeta);
+  await save({ now: true });
+  await refreshSecrets();
+  renderAll();
+
+  const locked = incoming.profiles.filter(p =>
+    evaluateProfile(p, state.settings, { unlocked, resolvedIds: secretIds }).blocked).length;
+  flash(locked
+    ? `Imported ${incoming.profiles.length} profile(s). ${locked} need review before they activate.`
+    : `Imported ${incoming.profiles.length} profile${incoming.profiles.length === 1 ? '' : 's'}.`);
+}
+
+/* Pulls plaintext credential values out of an imported payload, keyed by
+   profile+header so they can be re-homed into the active store. */
+function collectImportedSecrets(parsed) {
+  const values = new Map();
+  let count = 0;
+  const profiles = Array.isArray(parsed) ? parsed : (parsed?.profiles || []);
+  for (const profile of profiles) {
+    for (const key of ['requestHeaders', 'responseHeaders']) {
+      for (const header of profile?.[key] || []) {
+        if (!isSensitiveHeader(header)) continue;
+        const value = header.value;
+        if (typeof value === 'string' && value !== '') {
+          values.set(`${profile.name}\u0000${header.name}`, value);
+          count++;
+        }
+      }
+    }
+  }
+  return { values, count };
 }
 
 function flash(message) {
@@ -854,6 +1208,67 @@ function flash(message) {
 /* ---------------------------------------------------------------- *
  * Site access
  * ---------------------------------------------------------------- */
+
+/* Re-reads which credentials are currently resolvable. Only ids are held in
+   the popup; values stay in the store. */
+async function refreshSecrets() {
+  const wasUnlocked = unlocked;
+  unlocked = state.settings.credentialStorage === 'vault' ? await isUnlocked() : true;
+  if (wasUnlocked && !unlocked) hideAllCredentials();
+  const secrets = await resolveSecrets(state.settings);
+  secretIds = new Set(Object.keys(secrets).filter(id => secrets[id] !== ''));
+
+  blockedProfiles = state.profiles
+    .filter(p => p.enabled)
+    .map(p => ({ p, v: evaluateProfile(p, state.settings, { unlocked, resolvedIds: secretIds }) }))
+    .filter(x => x.v.hasSensitive && x.v.blocked)
+    .map(x => ({ profileId: x.p.id, profileName: x.p.name, reasons: x.v.reasons }));
+}
+
+/* The one place that re-reads vault state and repaints. Every lock/unlock
+   path goes through it, so the UI can never show stale lock status. */
+async function refreshAndRender() {
+  await refreshSecrets();
+  renderAll();
+}
+
+/* Locking must take revealed values off the screen and out of memory. */
+function hideAllCredentials() {
+  revealedHeaders.clear();
+  revealedValues.clear();
+}
+
+function renderBanners() {
+  const vaultMode = state.settings.credentialStorage === 'vault';
+  const lockBanner = $('lock-banner');
+  const showLock = vaultMode && !unlocked;
+  lockBanner.hidden = !showLock;
+  if (showLock) {
+    const n = state.profiles.filter(profileUsesCredentials).length;
+    $('lock-text').textContent = n
+      ? `Vault locked \u2014 ${n} profile${n === 1 ? '' : 's'} with credentials cannot be used or edited.`
+      : 'The credential vault is locked.';
+  }
+  $('btn-lock').hidden = !(vaultMode && unlocked);
+
+  /* Profiles blocked for a reason other than the lock get a quieter hint in
+     the status bar rather than a second banner. */
+  if (!showLock && blockedProfiles.length) {
+    const first = blockedProfiles[0];
+    $('status').title = `${first.profileName}: ${describeBlock(first.reasons)}`;
+  }
+}
+
+async function checkMigrationBanner() {
+  const bag = await api.storage.local.get('pendingMigration');
+  const pending = bag.pendingMigration;
+  const banner = $('migrate-banner');
+  banner.hidden = !pending;
+  if (!pending) return;
+  $('migrate-text').textContent =
+    `${pending.credentialCount} stored credential${pending.credentialCount === 1 ? '' : 's'} `
+    + 'need a storage choice.';
+}
 
 async function checkAccess() {
   const banner = $('access');
@@ -885,6 +1300,7 @@ function fillDatalist(id, values) {
 }
 
 function bind() {
+  hydrateIcons();
   fillDatalist('request-header-names', COMMON_REQUEST_HEADERS);
   fillDatalist('response-header-names', COMMON_RESPONSE_HEADERS);
   fillDatalist('csp-directive-names', CSP_DIRECTIVES);
@@ -936,7 +1352,45 @@ function bind() {
     inputs[section === 'filters' ? inputs.length - 1 : inputs.length - 2]?.focus();
   });
 
+  $('btn-security').addEventListener('click', () => {
+    section = section === 'security' ? 'requestHeaders' : 'security';
+    renderAll();
+  });
+
+  $('btn-back').addEventListener('click', () => {
+    section = 'requestHeaders';
+    renderAll();
+  });
+
   $('btn-grant').addEventListener('click', requestAccess);
+
+  $('btn-lock').addEventListener('click', async () => {
+    await lock();
+    sec.notifyBackground('lock');
+    await refreshAndRender();
+    const n = state.profiles.filter(profileUsesCredentials).length;
+    flash(`Vault locked. ${n} profile${n === 1 ? '' : 's'} with credentials ${n === 1 ? 'is' : 'are'} now inactive.`);
+  });
+
+  $('btn-unlock').addEventListener('click', async () => {
+    if (await sec.unlockFlow(state)) {
+      await refreshAndRender();
+      flash('Vault unlocked. Protected profiles are active again.');
+    }
+  });
+
+  $('btn-migrate').addEventListener('click', async () => {
+    const bag = await api.storage.local.get('pendingMigration');
+    if (!bag.pendingMigration) return;
+    if (await sec.runMigrationFlow(state, bag.pendingMigration)) {
+      await save({ now: true });
+      await refreshSecrets();
+      await checkMigrationBanner();
+      renderAll();
+      sec.notifyBackground('apply');
+      flash('Credential storage updated.');
+    }
+  });
   $('btn-export').addEventListener('click', exportFile);
   $('btn-copy').addEventListener('click', copyJson);
   $('btn-import').addEventListener('click', () => $('file-input').click());
@@ -957,6 +1411,11 @@ function bind() {
 
   api.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    /* The background flips this when the auto-lock alarm fires, so the popup
+       reflects a lock that happened while it was open. */
+    if (changes.vaultUnlocked && changes.vaultUnlocked.newValue !== unlocked) {
+      refreshAndRender();
+    }
     if (changes.ruleErrors) {
       ruleErrors = changes.ruleErrors.newValue || [];
       renderStatus();
@@ -976,9 +1435,13 @@ async function init() {
   lastSnapshot = JSON.stringify(state);
   const stored = await api.storage.local.get('ruleErrors');
   ruleErrors = stored.ruleErrors || [];
+  await refreshSecrets();
   bind();
   renderAll();
   checkAccess();
+  checkMigrationBanner();
+  /* Opening the credential UI counts as deliberate activity. */
+  noteActivity(ACTIVITY.openCredentialUi, state.settings);
 }
 
 init();
