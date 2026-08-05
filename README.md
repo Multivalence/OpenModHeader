@@ -10,6 +10,23 @@ Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no
 
 ---
 
+## Install
+
+[![Install for Firefox from Firefox Add-ons](https://img.shields.io/badge/Firefox_Add--ons-Install-FF7139?style=for-the-badge&logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/en-US/firefox/addon/openmodheader/) &nbsp; [![Install for Chrome from the Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Install-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/openmodheader/jkimjmcahphjennlnoaehijocmielfdd)
+
+**These are the official listings, and where you should install from.**
+
+| Store | Covers |
+|---|---|
+| **[Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/openmodheader/)** | Firefox |
+| **[Chrome Web Store](https://chromewebstore.google.com/detail/openmodheader/jkimjmcahphjennlnoaehijocmielfdd)** | Chrome, Edge, Brave, Vivaldi, Opera, and other Chromium browsers |
+
+Both builds are reviewed and signed by the vendor and update themselves, so there's nothing to re-download when a new version ships. That's all most people need. Everything else on this page is reference.
+
+Building the extension yourself from this repository is entirely optional: see [Install From Source](#install-from-source).
+
+---
+
 ## Features
 
 **Header editing**
@@ -80,6 +97,8 @@ Built on Manifest V3 for both Chromium and Firefox. No account, no telemetry, no
 ---
 
 ## Install From Source
+
+For the official builds, use the [store listings above](#install) — they're signed and update themselves. This section is for running the code in this repository directly, which is worth doing if you want to modify it or verify what you're running.
 
 ### Requirements
 
